@@ -32,10 +32,12 @@
     'images': [
         'images/ledger.png', ],
     'depends': ['account',
+                'base_suspend_security',
                 'report_webkit'],
     'demo': [],
     'data': ['account_view.xml',
              'data/financial_webkit_header.xml',
+             'data/ir_cron.xml',
              'report/report.xml',
              'wizard/wizard.xml',
              'wizard/balance_common_view.xml',

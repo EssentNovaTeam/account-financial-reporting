@@ -21,6 +21,7 @@
 ##############################################################################
 
 from operator import add
+from openerp.exceptions import Warning as UserError
 
 from .common_reports import CommonReportHeaderWebkit
 
@@ -82,8 +83,15 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
         ctx.update({'state': target_move,
                     'all_fiscalyear': True})
 
+        closed_period_ids = []
         if use_period_ids:
+            # Exclude the closed periods and store them for later reference
+            closed_period_ids = period_obj.browse(
+                self.cursor, self.uid, period_ids).filtered(
+                lambda x: x.state == 'done').ids
+            period_ids = [p for p in period_ids if p not in closed_period_ids]
             ctx.update({'periods': period_ids})
+
         elif main_filter == 'filter_date':
             ctx.update({'date_from': start,
                         'date_to': stop})
@@ -92,9 +100,41 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
             self.cursor,
             self.uid,
             account_ids,
-            ['type', 'code', 'name', 'debit', 'credit',
-                'balance', 'parent_id', 'level', 'child_id'],
+            ['id', 'type', 'code', 'name', 'debit', 'credit',
+             'balance', 'parent_id', 'level', 'child_id'],
             context=ctx)
+
+        # Aggregate the static balance values to the current ones
+        if closed_period_ids:
+            if not self.pool.get('account.static.balance').check_data_ready(
+                    self.cursor, self.uid, {}):
+                raise UserError("Static data is not ready.")
+            self.cursor.execute("""
+                SELECT
+                  account_id,
+                  SUM(credit) AS credit,
+                  SUM(debit) AS debit,
+                  SUM(balance) as balance
+                FROM account_static_balance
+                WHERE account_id IN %s
+                AND period_id IN %s
+                GROUP BY account_id;
+                """, (tuple(account_ids), tuple(closed_period_ids)))
+            static_data = self.cursor.dictfetchall()
+            # Iterate over accounts
+            for account in accounts:
+                # Get all children accounts
+                children_ids = account_obj._get_children_and_consol(
+                    self.cursor, self.uid, account['id'])
+                entries = filter(
+                    lambda s: s['account_id'] in children_ids, static_data)
+                for entry in entries:
+                    # We have static data for the account so we sum the values
+                    account.update({
+                        'credit': account['credit'] + entry['credit'],
+                        'debit': account['debit'] + entry['debit'],
+                        'balance': account['balance'] + entry['balance'],
+                    })
 
         accounts_by_id = {}
         for account in accounts:

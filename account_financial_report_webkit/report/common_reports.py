@@ -368,35 +368,143 @@ class CommonReportHeaderWebkit(common_report_header):
     # Initial Balance helper      #
     ###############################
 
+    @staticmethod
+    def _organize_by_account(data):
+        res = {}
+        for x in data:
+            values = {
+                'credit': x['credit'],
+                'debit': x['debit'],
+                'balance': x['balance'],
+                'curr_balance': x['curr_balance']
+            }
+            res[x.get('account_id')] = values
+        return res
+
     def _compute_init_balance(self, account_id=None, period_ids=None,
                               mode='computed', default_values=False):
         if not isinstance(period_ids, list):
             period_ids = [period_ids]
-        res = {}
 
+        account_ids = account_id
+        if not isinstance(account_id, list):
+            account_ids = [account_ids]
+        res = {}
+        result = []
+        if not account_ids or not period_ids:
+            raise Exception('Missing account or period_ids')
+
+        # Setup default values for all accounts
+        for acc_id in account_ids:
+            res[acc_id] = {
+                'debit': 0.0,
+                'credit': 0.0,
+                'init_balance': 0.0,
+                'init_balance_currency': 0.0,
+                'state': mode
+            }
+
+        draft_result = []
+        static_result = []
+        result = {}
+
+        # Actual calculation of the balances for each account
         if not default_values:
-            if not account_id or not period_ids:
-                raise Exception('Missing account or period_ids')
+
+            # Split up periods in draft and done
+            periods = self.pool.get("account.period").browse(
+                self.cursor, self.uid, period_ids)
+            draft_periods = periods.filtered(lambda p: p.state != 'done').ids
+            done_periods = [x for x in periods.ids if x not in draft_periods]
+
             try:
-                self.cursor.execute("SELECT sum(debit) AS debit, "
-                                    " sum(credit) AS credit, "
-                                    " sum(debit)-sum(credit) AS balance, "
-                                    " sum(amount_currency) AS curr_balance"
-                                    " FROM account_move_line"
-                                    " WHERE period_id in %s"
-                                    " AND account_id = %s",
-                                    (tuple(period_ids), account_id))
-                res = self.cursor.dictfetchone()
+                # Done periods => static data is stored
+                # Get initial balance for each account from the static source
+                if account_ids and done_periods:
+                    self.cursor.execute("""
+                      SELECT
+                        account_id,
+                        SUM(credit) AS credit,
+                        SUM(debit) AS debit,
+                        SUM(balance) AS balance,
+                        SUM(curr_balance) AS curr_balance
+                      FROM account_static_balance
+                        WHERE account_id IN %s AND period_id IN %s 
+                        GROUP BY account_id;
+                    """, (tuple(account_ids), tuple(done_periods)))
+                    static_result = self._organize_by_account(
+                        self.cursor.dictfetchall())
+
+                # Draft periods => recalculate
+                if account_ids and draft_periods:
+                    self.cursor.execute("""
+                        SELECT
+                          account_id,
+                          COALESCE(SUM(debit), 0) AS debit,
+                          COALESCE(SUM(credit), 0) AS credit,
+                          COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) 
+                            AS balance, 
+                          COALESCE(SUM(amount_currency), 0) AS curr_balance
+                        FROM account_move_line
+                        WHERE account_id IN %s AND period_id IN %s
+                        GROUP BY account_id;
+                    """, (tuple(account_ids), tuple(draft_periods)))
+                    draft_result = self._organize_by_account(
+                        self.cursor.dictfetchall())
 
             except Exception:
                 self.cursor.rollback()
                 raise
 
-        return {'debit': res.get('debit') or 0.0,
-                'credit': res.get('credit') or 0.0,
-                'init_balance': res.get('balance') or 0.0,
-                'init_balance_currency': res.get('curr_balance') or 0.0,
-                'state': mode}
+        if static_result and draft_result:
+            # Merge the results
+            for acc_id, values in draft_result.items():
+                new_debit = values['debit']
+                new_credit = values['credit']
+                new_bal = values['balance']
+                new_curr_bal = values['curr_balance']
+                if acc_id in static_result:
+                    static_data = static_result[acc_id]
+
+                    new_debit += static_data['debit']
+                    new_credit += static_data['credit']
+                    new_bal = static_data['balance'] + new_debit - new_credit
+                    new_curr_bal += static_data['curr_balance']
+
+                result[acc_id] = {
+                    'account_id': acc_id,
+                    'debit': new_debit,
+                    'credit': new_credit,
+                    'balance': new_bal,
+                    'curr_balance': new_curr_bal,
+                }
+
+        elif static_result:
+            result = static_result
+        elif draft_result:
+            result = draft_result
+
+        # Backwards compatibility for getting 1 account at a time
+        if not isinstance(account_id, list):
+            entry = result[account_id] if result else {}
+            return {
+                'debit': entry.get('debit') or 0.0,
+                'credit': entry.get('credit') or 0.0,
+                'init_balance': entry.get('balance') or 0.0,
+                'init_balance_currency': entry.get('curr_balance') or 0.0,
+                'state': mode
+            }
+        
+        # Override the default values with actual values.
+        for account_id, values in result.items():
+            res[account_id] = {
+                'debit': values.get('debit') or 0.0,
+                'credit': values.get('credit') or 0.0,
+                'init_balance': values.get('balance') or 0.0,
+                'init_balance_currency': values.get('curr_balance') or 0.0,
+                'state': mode
+            }
+        return res
 
     def _read_opening_balance(self, account_ids, start_period):
         """ Read opening balances from the opening balance
@@ -410,10 +518,8 @@ class CommonReportHeaderWebkit(common_report_header):
                   'You have to configure a period on the first of January'
                   ' with the special flag.'))
 
-        res = {}
-        for account_id in account_ids:
-            res[account_id] = self._compute_init_balance(
-                account_id, opening_period_selected, mode='read')
+        res = self._compute_init_balance(
+            account_ids, opening_period_selected, mode='read')
         return res
 
     def _compute_initial_balances(self, account_ids, start_period, fiscalyear):
