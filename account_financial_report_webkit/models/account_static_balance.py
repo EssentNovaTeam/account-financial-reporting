@@ -48,11 +48,7 @@ class AccountStaticBalance(models.Model):
 
     @api.model
     def check_data_ready(self):
-        """ Check to ensure all possible static data is calculated and ready.
-        """
-        if self.get_entries_to_calculate():
-            # There are missing entries
-            return False
+        """ Override me to signal that the static data cannot be used yet. """
         return True
 
     @api.multi
@@ -67,8 +63,7 @@ class AccountStaticBalance(models.Model):
             CROSS JOIN account_account aa
             LEFT JOIN account_static_balance asb
               ON asb.account_id = aa.id AND asb.period_id = ap.id
-            WHERE ap.state = 'done'
-              AND ap.special = FALSE)
+            WHERE ap.state = 'done')
           SELECT period, account FROM balances WHERE balance IS NULL;
         """)
         return self.env.cr.fetchall()
@@ -95,14 +90,18 @@ class AccountStaticBalance(models.Model):
             logger.debug("No missing entries found. Static account balance "
                          "data is up to date.")
             return
-        # Split into unique periods and accounts
-        per_ids, acc_ids = map(list, map(set, zip(*missing_combinations)))
-
-        missing_periods = self.env['account.period'].browse(per_ids)
-        missing_accounts = self.env['account.account'].browse(acc_ids)
+        missing_per, missing_acc = self.get_missing_periods_and_accounts(
+            missing_combinations)
 
         self.calculate_static_balance(
-            periods=missing_periods, accounts=missing_accounts)
+            periods=missing_per, accounts=missing_acc)
+
+    def get_missing_periods_and_accounts(self, missing_combinations):
+        # Split into unique periods and accounts
+        per_ids, acc_ids = map(list, map(set, zip(*missing_combinations)))
+        missing_periods = self.env['account.period'].browse(per_ids)
+        missing_accounts = self.env['account.account'].browse(acc_ids)
+        return missing_periods, missing_accounts
 
     @api.model
     def calculate_static_balance(self, periods, accounts=None):
@@ -153,6 +152,7 @@ class AccountStaticBalance(models.Model):
                 with self.env.cr.savepoint():
                     self.create(row)
             except psycopg2.IntegrityError:
+                # TODO: This does not seem to be the correct error to catch
                 pass
 
         time_taken = time() - start_time

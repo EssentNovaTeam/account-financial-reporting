@@ -49,6 +49,24 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
             }
         return res
 
+    def verify_static_data(self):
+        """ Check the static balance data table and update values when
+        necessary. """
+        stat_bal_obj = self.pool.get('account.static.balance')
+
+        # Allow for other blocking checks
+        stat_bal_obj.check_data_ready(self.cursor, self.uid, {})
+
+        # Verify that all static data is there
+        missing_entries = stat_bal_obj.get_entries_to_calculate(
+            self.cursor, self.uid, {})
+
+        if missing_entries:
+            missing_per, missing_acc = stat_bal_obj. \
+                get_missing_periods_and_accounts(missing_entries)
+            stat_bal_obj.calculate_static_balance(
+                periods=missing_per, accounts=missing_acc)
+
     def _get_account_details(self, account_ids, target_move, fiscalyear,
                              main_filter, start, stop, initial_balance_mode,
                              context=None):
@@ -71,8 +89,11 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
 
         account_obj = self.pool.get('account.account')
         period_obj = self.pool.get('account.period')
+        stat_bal_obj = self.pool.get('account.static.balance')
         use_period_ids = main_filter in (
             'filter_no', 'filter_period', 'filter_opening')
+
+        period_ids = []
 
         if use_period_ids:
             if main_filter == 'filter_opening':
@@ -101,81 +122,18 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
             ctx.update({'date_from': start,
                         'date_to': stop})
 
+        field_names = ['id', 'type', 'code', 'name', 'parent_id',
+                       'level', 'child_id']
+
         accounts = account_obj.read(
-            self.cursor,
-            self.uid,
-            account_ids,
-            ['id', 'type', 'code', 'name', 'parent_id', 'level', 'child_id'],
-            context=ctx)
+            self.cursor, self.uid, account_ids, field_names, context=ctx)
 
-        closed_period_ids = period_obj.browse(
-            self.cursor, self.uid, period_ids).filtered(
-            lambda x: x.state == 'done').ids
-        open_periods_ids = [
-            p for p in period_ids if p not in closed_period_ids]
+        if not use_period_ids:
+            period_ids = period_obj.search(
+                self.cursor, self.uid, [], context=ctx)
 
-        dynamic_data = {}
-        # Calculate credit, debit and balance for each account in open periods
-        if open_periods_ids:
-            self.cursor.execute("""
-                SELECT
-                  aa.id AS id,
-                  COALESCE(SUM(debit), 0) AS debit,
-                  COALESCE(SUM(credit), 0) AS credit,
-                  COALESCE(sum(debit), 0) - COALESCE(sum(credit), 0)
-                    AS balance,
-                  COALESCE(sum(amount_currency), 0) AS curr_balance
-                FROM account_account aa
-                CROSS JOIN account_period ap
-                LEFT JOIN account_move_line aml
-                  ON aa.id = account_id AND ap.id = period_id
-                WHERE ap.id IN %s
-                  AND aa.id IN %s
-                GROUP BY aa.id
-            """, (tuple(open_periods_ids), tuple(account_ids)))
-            dynamic_data = self.map_data_to_account_id(
-                self.cursor.dictfetchall())
-
-        # Insert credit, debit and balance field values
-        for account in accounts:
-            entry = dynamic_data.get(account.get('id'))
-            account.update({
-                'credit': entry['credit'] if entry else 0.0,
-                'debit': entry['debit'] if entry else 0.0,
-                'balance': entry['balance'] if entry else 0.0
-            })
-
-        # Aggregate the static balance values to the current ones
-        if closed_period_ids:
-            if not self.pool.get('account.static.balance').check_data_ready(
-                    self.cursor, self.uid, {}):
-                raise UserError("Static data is not ready.")
-            self.cursor.execute("""
-                SELECT
-                  account_id,
-                  SUM(credit) AS credit,
-                  SUM(debit) AS debit,
-                  SUM(balance) as balance
-                FROM account_static_balance
-                WHERE account_id IN %s
-                AND period_id IN %s
-                GROUP BY account_id;
-                """, (tuple(account_ids), tuple(closed_period_ids)))
-            static_data = self.cursor.dictfetchall()
-            # Iterate over accounts
-            for account in accounts:
-                # Get all children accounts
-                children_ids = account_obj._get_children_and_consol(
-                    self.cursor, self.uid, account['id'])
-                entries = filter(
-                    lambda s: s['account_id'] in children_ids, static_data)
-                for entry in entries:
-                    # We have static data for the account so we sum the values
-                    account.update({
-                        'credit': account['credit'] + entry['credit'],
-                        'debit': account['debit'] + entry['debit'],
-                        'balance': account['balance'] + entry['balance'],
-                    })
+        # use static data to calculate credit, debit and balance
+        accounts = self.enrich_account_data(accounts, period_ids)
 
         accounts_by_id = {}
         for account in accounts:
@@ -196,6 +154,92 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
                     account['debit'] - account['credit']
             accounts_by_id[account['id']] = account
         return accounts_by_id
+
+    def enrich_account_data(self, accounts, period_ids):
+        """
+        Calculate the credit, debit and balance of each account in a specified
+        set of periods. Split up the calculation logic to closed (static) and
+        open (dynamic) period variants.
+        :param accounts: dict of specific account values
+        :param period_ids: the ids of the periods
+        :return: {'account_id': {debit, credit, balance, curr_balance}}
+        """
+        period_obj = self.pool.get('account.period')
+        account_obj = self.pool.get('account.account')
+
+        closed_period_ids = period_obj.browse(
+            self.cursor, self.uid, period_ids).filtered(
+                lambda x: x.state == 'done').ids
+        open_periods_ids = [
+            p for p in period_ids if p not in closed_period_ids]
+        account_ids = [acc['id'] for acc in accounts]
+
+        calc_data = {}
+        if open_periods_ids:
+            self.cursor.execute("""
+                SELECT
+                  aa.id AS id,
+                  COALESCE(SUM(debit), 0) AS debit,
+                  COALESCE(SUM(credit), 0) AS credit,
+                  COALESCE(sum(debit), 0) - COALESCE(sum(credit), 0)
+                    AS balance,
+                  COALESCE(sum(amount_currency), 0) AS curr_balance
+                FROM account_account aa
+                CROSS JOIN account_period ap
+                LEFT JOIN account_move_line aml
+                  ON aa.id = account_id AND ap.id = period_id
+                WHERE ap.id IN %s
+                  AND aa.id IN %s
+                GROUP BY aa.id
+            """, (tuple(open_periods_ids), tuple(account_ids)))
+            calc_data = self.map_data_to_account_id(
+                self.cursor.dictfetchall())
+
+        # Insert credit, debit and balance field values
+        for account in accounts:
+            entry = calc_data.get(account['id'])
+            account.update({
+                'credit': entry['credit'] if entry else 0.0,
+                'debit': entry['debit'] if entry else 0.0,
+                'balance': entry['balance'] if entry else 0.0
+            })
+
+        # Aggregate the static balance values to the current ones
+        if closed_period_ids:
+            # Ensure static data is correct
+            self.verify_static_data()
+
+            self.cursor.execute("""
+                SELECT
+                  account_id,
+                  SUM(credit) AS credit,
+                  SUM(debit) AS debit,
+                  SUM(balance) as balance
+                FROM account_static_balance
+                WHERE account_id IN %s
+                AND period_id IN %s
+                GROUP BY account_id;
+                """, (tuple(account_ids), tuple(closed_period_ids)))
+
+            static_data = self.cursor.dictfetchall()
+
+            # Iterate over accounts
+            for account in accounts:
+                # Get all children accounts
+                children_ids = account_obj._get_children_and_consol(
+                    self.cursor, self.uid, account['id'])
+                entries = filter(
+                    lambda s: s['account_id'] in children_ids, static_data)
+                for entry in entries:
+                    # We have static data for the account so we sum
+                    # the values
+                    account.update({
+                        'credit': account['credit'] + entry['credit'],
+                        'debit': account['debit'] + entry['debit'],
+                        'balance': account['balance'] + entry['balance'],
+                    })
+
+        return accounts
 
     def _get_comparison_details(self, data, account_ids, target_move,
                                 comparison_filter, index):
