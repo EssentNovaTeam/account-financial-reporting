@@ -12,7 +12,8 @@ class TestAccountStaticBalance(SavepointCase):
     def setUpClass(cls):
         super(TestAccountStaticBalance, cls).setUpClass()
         # Clear existing entries (if any)
-        cls.env['account.static.balance'].search([]).unlink()
+        cls.env['account.static.balance'].search([]).with_context(
+            skip_recalculation=True).unlink()
         cls.period = cls.env['account.period'].search([], limit=1)
         cls.account = cls.env['account.account'].search([], limit=1)
 
