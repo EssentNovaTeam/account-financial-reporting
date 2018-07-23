@@ -370,15 +370,31 @@ class CommonReportHeaderWebkit(common_report_header):
 
     @staticmethod
     def _organize_by_account(data):
+        """ Extract account_id key from list of account data dictionary and
+        map the additional values to the account_id. """
         res = {}
         for x in data:
-            values = {
+            res[x.get('account_id')] = {
                 'credit': x['credit'],
                 'debit': x['debit'],
                 'balance': x['balance'],
                 'curr_balance': x['curr_balance']
             }
-            res[x.get('account_id')] = values
+        return res
+
+    @staticmethod
+    def update_account_data(res, update_data):
+        """ Combine 2 dictionaries, each with account_id as key"""
+        for acc_id, values in update_data.items():
+            res_entry = res[acc_id]
+            credit = values['credit'] + res_entry['credit']
+            debit = values['debit'] + res_entry['debit']
+            balance = debit - credit
+            res[acc_id].update({
+                'credit': credit,
+                'debit': debit,
+                'balance': balance,
+            })
         return res
 
     def _compute_init_balance(self, account_id=None, period_ids=None,
@@ -390,7 +406,6 @@ class CommonReportHeaderWebkit(common_report_header):
         if not isinstance(account_id, list):
             account_ids = [account_ids]
         res = {}
-        result = []
         if not account_ids or not period_ids:
             raise Exception('Missing account or period_ids')
 
@@ -404,85 +419,28 @@ class CommonReportHeaderWebkit(common_report_header):
                 'state': mode
             }
 
-        draft_result = []
-        static_result = []
         result = {}
-
         # Actual calculation of the balances for each account
         if not default_values:
-
-            # Split up periods in draft and done
-            periods = self.pool.get("account.period").browse(
-                self.cursor, self.uid, period_ids)
-            draft_periods = periods.filtered(lambda p: p.state != 'done').ids
-            done_periods = [x for x in periods.ids if x not in draft_periods]
-
             try:
-                # Done periods => static data is stored
-                # Get initial balance for each account from the static source
-                if account_ids and done_periods:
-                    self.cursor.execute("""
-                      SELECT
-                        account_id,
-                        SUM(credit) AS credit,
-                        SUM(debit) AS debit,
-                        SUM(balance) AS balance,
-                        SUM(curr_balance) AS curr_balance
-                      FROM account_static_balance
-                        WHERE account_id IN %s AND period_id IN %s 
-                        GROUP BY account_id;
-                    """, (tuple(account_ids), tuple(done_periods)))
-                    static_result = self._organize_by_account(
-                        self.cursor.dictfetchall())
-
-                # Draft periods => recalculate
-                if account_ids and draft_periods:
-                    self.cursor.execute("""
-                        SELECT
-                          account_id,
-                          COALESCE(SUM(debit), 0) AS debit,
-                          COALESCE(SUM(credit), 0) AS credit,
-                          COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0) 
-                            AS balance, 
-                          COALESCE(SUM(amount_currency), 0) AS curr_balance
-                        FROM account_move_line
-                        WHERE account_id IN %s AND period_id IN %s
-                        GROUP BY account_id;
-                    """, (tuple(account_ids), tuple(draft_periods)))
-                    draft_result = self._organize_by_account(
-                        self.cursor.dictfetchall())
+                self.cursor.execute("""
+                    SELECT
+                      account_id,
+                      COALESCE(SUM(debit), 0) AS debit,
+                      COALESCE(SUM(credit), 0) AS credit,
+                      COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0)
+                        AS balance,
+                      COALESCE(SUM(amount_currency), 0) AS curr_balance
+                    FROM account_move_line
+                    WHERE account_id IN %s AND period_id IN %s
+                    GROUP BY account_id;
+                """, (tuple(account_ids), tuple(period_ids)))
+                result = self._organize_by_account(
+                    self.cursor.dictfetchall())
 
             except Exception:
                 self.cursor.rollback()
                 raise
-
-        if static_result and draft_result:
-            # Merge the results
-            for acc_id, values in draft_result.items():
-                new_debit = values['debit']
-                new_credit = values['credit']
-                new_bal = values['balance']
-                new_curr_bal = values['curr_balance']
-                if acc_id in static_result:
-                    static_data = static_result[acc_id]
-
-                    new_debit += static_data['debit']
-                    new_credit += static_data['credit']
-                    new_bal = static_data['balance'] + new_debit - new_credit
-                    new_curr_bal += static_data['curr_balance']
-
-                result[acc_id] = {
-                    'account_id': acc_id,
-                    'debit': new_debit,
-                    'credit': new_credit,
-                    'balance': new_bal,
-                    'curr_balance': new_curr_bal,
-                }
-
-        elif static_result:
-            result = static_result
-        elif draft_result:
-            result = draft_result
 
         # Backwards compatibility for getting 1 account at a time
         if not isinstance(account_id, list):
@@ -540,19 +498,22 @@ class CommonReportHeaderWebkit(common_report_header):
         opening_period_selected = self.get_included_opening_period(
             start_period)
 
-        for acc in self.pool.get('account.account').browse(self.cursor,
-                                                           self.uid,
-                                                           account_ids):
-            res[acc.id] = self._compute_init_balance(default_values=True)
-            if acc.user_type.close_method == 'none':
-                # we compute the initial balance for close_method == none only
-                # when we print a GL during the year, when the opening period
-                # is not included in the period selection!
-                if pnl_periods_ids and not opening_period_selected:
-                    res[acc.id] = self._compute_init_balance(
-                        acc.id, pnl_periods_ids)
-            else:
-                res[acc.id] = self._compute_init_balance(acc.id, bs_period_ids)
+        # Construct default values for each account
+        res = self._compute_init_balance(account_id=account_ids,
+                                         default_values=True)
+
+        accounts = self.pool.get('account.account').browse(
+            self.cursor, self.uid, account_ids)
+
+        none_accounts = accounts.filtered(
+            lambda x: x.user_type.close_method == 'none')
+
+        if pnl_periods_ids and not opening_period_selected:
+            res = self.update_account_data(res, self._compute_init_balance(
+                none_accounts.ids, pnl_periods_ids))
+        res = self.update_account_data(res, self._compute_init_balance(
+                account_ids, bs_period_ids))
+
         return res
 
     ################################################

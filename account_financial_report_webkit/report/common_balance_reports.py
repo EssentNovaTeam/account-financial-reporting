@@ -38,6 +38,17 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
     def find_key_by_value_in_list(dic, value):
         return [key for key, val in dic.iteritems() if value in val][0]
 
+    @staticmethod
+    def map_data_to_account_id(data):
+        res = {}
+        for x in data:
+            res[x.get('id')] = {
+                'credit': x.get('credit'),
+                'debit': x.get('debit'),
+                'balance': x.get('balance'),
+            }
+        return res
+
     def _get_account_details(self, account_ids, target_move, fiscalyear,
                              main_filter, start, stop, initial_balance_mode,
                              context=None):
@@ -83,13 +94,7 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
         ctx.update({'state': target_move,
                     'all_fiscalyear': True})
 
-        closed_period_ids = []
         if use_period_ids:
-            # Exclude the closed periods and store them for later reference
-            closed_period_ids = period_obj.browse(
-                self.cursor, self.uid, period_ids).filtered(
-                lambda x: x.state == 'done').ids
-            period_ids = [p for p in period_ids if p not in closed_period_ids]
             ctx.update({'periods': period_ids})
 
         elif main_filter == 'filter_date':
@@ -100,9 +105,45 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
             self.cursor,
             self.uid,
             account_ids,
-            ['id', 'type', 'code', 'name', 'debit', 'credit',
-             'balance', 'parent_id', 'level', 'child_id'],
+            ['id', 'type', 'code', 'name', 'parent_id', 'level', 'child_id'],
             context=ctx)
+
+        closed_period_ids = period_obj.browse(
+            self.cursor, self.uid, period_ids).filtered(
+            lambda x: x.state == 'done').ids
+        open_periods_ids = [
+            p for p in period_ids if p not in closed_period_ids]
+
+        dynamic_data = {}
+        # Calculate credit, debit and balance for each account in open periods
+        if open_periods_ids:
+            self.cursor.execute("""
+                SELECT
+                  aa.id AS id,
+                  COALESCE(SUM(debit), 0) AS debit,
+                  COALESCE(SUM(credit), 0) AS credit,
+                  COALESCE(sum(debit), 0) - COALESCE(sum(credit), 0)
+                    AS balance,
+                  COALESCE(sum(amount_currency), 0) AS curr_balance
+                FROM account_account aa
+                CROSS JOIN account_period ap
+                LEFT JOIN account_move_line aml
+                  ON aa.id = account_id AND ap.id = period_id
+                WHERE ap.id IN %s
+                  AND aa.id IN %s
+                GROUP BY aa.id
+            """, (tuple(open_periods_ids), tuple(account_ids)))
+            dynamic_data = self.map_data_to_account_id(
+                self.cursor.dictfetchall())
+
+        # Insert credit, debit and balance field values
+        for account in accounts:
+            entry = dynamic_data.get(account.get('id'))
+            account.update({
+                'credit': entry['credit'] if entry else 0.0,
+                'debit': entry['debit'] if entry else 0.0,
+                'balance': entry['balance'] if entry else 0.0
+            })
 
         # Aggregate the static balance values to the current ones
         if closed_period_ids:

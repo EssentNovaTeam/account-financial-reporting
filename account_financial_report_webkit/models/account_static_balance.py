@@ -48,7 +48,11 @@ class AccountStaticBalance(models.Model):
 
     @api.model
     def check_data_ready(self):
-        """ Override me to signal static data is ready or not. """
+        """ Check to ensure all possible static data is calculated and ready.
+        """
+        if self.get_entries_to_calculate():
+            # There are missing entries
+            return False
         return True
 
     @api.multi
@@ -63,7 +67,8 @@ class AccountStaticBalance(models.Model):
             CROSS JOIN account_account aa
             LEFT JOIN account_static_balance asb
               ON asb.account_id = aa.id AND asb.period_id = ap.id
-            WHERE ap.state = 'done')
+            WHERE ap.state = 'done'
+              AND ap.special = FALSE)
           SELECT period, account FROM balances WHERE balance IS NULL;
         """)
         return self.env.cr.fetchall()
