@@ -168,7 +168,8 @@ class AccountStaticBalance(models.Model):
         return self.env.cr.dictfetchall()
 
     @api.model
-    def get_balances(self, accounts, periods, include_draft=False):
+    def get_balances(self, accounts, periods, include_draft=False,
+                     consolidate=True):
         """
         Calculate the credit, debit and balance of each account in a specified
         set of periods. Split up the calculation logic to static and dynamic
@@ -177,13 +178,16 @@ class AccountStaticBalance(models.Model):
         returned accounts if not already present).
         :param accounts: dict of specific account values
         :param period_ids: the ids of the periods
+        :param include_draft: include unposted moves
+        :param consolidate: include child and consolidated accounts
         :return: dictionary of account ids to values
         """
         if not accounts or not periods:
             return {}
         return_ids = accounts.ids  # Don't return child and consolitated
-        accounts |= self.env['account.account'].browse(
-            accounts._get_children_and_consol())
+        if consolidate:
+            accounts |= self.env['account.account'].browse(
+                accounts._get_children_and_consol())
 
         fields_to_read = [
             'id', 'type', 'code', 'name', 'parent_id', 'level', 'child_id']
@@ -229,22 +233,22 @@ class AccountStaticBalance(models.Model):
                 """, (tuple(accounts.ids), tuple(static_periods.ids)))
             map_data_to_account_id(self.env.cr.dictfetchall())
 
-        # Iterate over accounts
-        values = res.copy()
-        for account in res.values():
-            # Get all children accounts
-            for child_id in self.env['account.account'].browse(
-                    account['id'])._get_children_and_consol():
-                if child_id == account['id']:
-                    continue
-                entry = values[child_id]
-                # We have static data for the account so we sum
-                # the values
-                account.update({
-                    'credit': account['credit'] + entry['credit'],
-                    'debit': account['debit'] + entry['debit'],
-                    'balance': account['balance'] + entry['balance'],
-                    'curr_balance': (account['curr_balance'] +
-                                     entry['curr_balance']),
-                })
+        if consolidate:
+            values = res.copy()
+            for account in res.values():
+                # Get all children accounts
+                for child_id in self.env['account.account'].browse(
+                        account['id'])._get_children_and_consol():
+                    if child_id == account['id']:
+                        continue
+                    entry = values[child_id]
+                    # We have static data for the account so we sum
+                    # the values
+                    account.update({
+                        'credit': account['credit'] + entry['credit'],
+                        'debit': account['debit'] + entry['debit'],
+                        'balance': account['balance'] + entry['balance'],
+                        'curr_balance': (account['curr_balance'] +
+                                         entry['curr_balance']),
+                    })
         return dict(item for item in res.iteritems() if item[0] in return_ids)
