@@ -33,6 +33,5 @@ class AccountPeriodClose(models.TransientModel):
 
         periods = self.env['account.period'].browse(
             self.env.context.get('active_ids', []))
-        self.env['account.static.balance'].suspend_security()\
-            .calculate_static_balance(periods)
+        self.env['account.static.balance'].calculate_static_balance(periods)
         return res

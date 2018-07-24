@@ -20,9 +20,6 @@
 #
 ##############################################################################
 
-from operator import add
-from openerp.exceptions import Warning as UserError
-
 from .common_reports import CommonReportHeaderWebkit
 
 
@@ -37,35 +34,6 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
     @staticmethod
     def find_key_by_value_in_list(dic, value):
         return [key for key, val in dic.iteritems() if value in val][0]
-
-    @staticmethod
-    def map_data_to_account_id(data):
-        res = {}
-        for x in data:
-            res[x.get('id')] = {
-                'credit': x.get('credit'),
-                'debit': x.get('debit'),
-                'balance': x.get('balance'),
-            }
-        return res
-
-    def verify_static_data(self):
-        """ Check the static balance data table and update values when
-        necessary. """
-        stat_bal_obj = self.pool.get('account.static.balance')
-
-        # Allow for other blocking checks
-        stat_bal_obj.check_data_ready(self.cursor, self.uid, {})
-
-        # Verify that all static data is there
-        missing_entries = stat_bal_obj.get_entries_to_calculate(
-            self.cursor, self.uid, {})
-
-        if missing_entries:
-            missing_per, missing_acc = stat_bal_obj. \
-                get_missing_periods_and_accounts(missing_entries)
-            stat_bal_obj.calculate_static_balance(
-                periods=missing_per, accounts=missing_acc)
 
     def _get_account_details(self, account_ids, target_move, fiscalyear,
                              main_filter, start, stop, initial_balance_mode,
@@ -89,7 +57,6 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
 
         account_obj = self.pool.get('account.account')
         period_obj = self.pool.get('account.period')
-        stat_bal_obj = self.pool.get('account.static.balance')
         use_period_ids = main_filter in (
             'filter_no', 'filter_period', 'filter_opening')
 
@@ -128,8 +95,15 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
 
         # use static data to calculate credit, debit and balance
         # This also ensures that all static data has been calculated and is
-        # ready for use. (Including the opening balances.)
-        accounts = self.enrich_account_data(accounts, period_ids)
+        # ready for use. (Including the opening balances. If the data is not
+        # present it will be computed on the fly.
+        accounts = self.pool['account.static.balance'].get_balances(
+            self.cursor, self.uid,
+            self.pool['account.account'].browse(
+                self.cursor, self.uid, account_ids),
+            self.pool['account.period'].browse(
+                self.cursor, self.uid, period_ids),
+            include_draft=(target_move == 'all'))
 
         init_balance = False
         if initial_balance_mode == 'opening_balance':
@@ -138,111 +112,17 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
             init_balance = self._compute_initial_balances(
                 account_ids, start, fiscalyear)
 
-        accounts_by_id = {}
-        for account in accounts:
+        for account_id in account_ids:
+            account = accounts[account_id]
             if init_balance:
-                # sum for top level views accounts
-                child_ids = account_obj._get_children_and_consol(
-                    self.cursor, self.uid, account['id'], ctx)
-                if child_ids:
-                    child_init_balances = [
-                        init_bal['init_balance']
-                        for acnt_id, init_bal in init_balance.iteritems()
-                        if acnt_id in child_ids]
-                    top_init_balance = reduce(add, child_init_balances)
-                    account['init_balance'] = top_init_balance
-                else:
-                    account.update(init_balance[account['id']])
-                account['balance'] = account['init_balance'] + \
-                    account['debit'] - account['credit']
-            accounts_by_id[account['id']] = account
-        return accounts_by_id
+                entry = init_balance[account_id]
+                account['init_balance'] = entry['balance']
+                account['init_balance_currency'] = entry['curr_balance']
+                account['balance'] += entry['balance']
+                account['curr_balance'] += entry['curr_balance']
 
-    def enrich_account_data(self, accounts, period_ids):
-        """
-        Calculate the credit, debit and balance of each account in a specified
-        set of periods. Split up the calculation logic to closed (static) and
-        open (dynamic) period variants.
-        :param accounts: dict of specific account values
-        :param period_ids: the ids of the periods
-        :return: {'account_id': {debit, credit, balance, curr_balance}}
-        """
-        period_obj = self.pool.get('account.period')
-        account_obj = self.pool.get('account.account')
-
-        closed_period_ids = period_obj.browse(
-            self.cursor, self.uid, period_ids).filtered(
-                lambda x: x.state == 'done').ids
-        open_periods_ids = [
-            p for p in period_ids if p not in closed_period_ids]
-        account_ids = [acc['id'] for acc in accounts]
-
-        calc_data = {}
-        if open_periods_ids:
-            self.cursor.execute("""
-                SELECT
-                  aa.id AS id,
-                  COALESCE(SUM(debit), 0) AS debit,
-                  COALESCE(SUM(credit), 0) AS credit,
-                  COALESCE(sum(debit), 0) - COALESCE(sum(credit), 0)
-                    AS balance,
-                  COALESCE(sum(amount_currency), 0) AS curr_balance
-                FROM account_account aa
-                CROSS JOIN account_period ap
-                LEFT JOIN account_move_line aml
-                  ON aa.id = account_id AND ap.id = period_id
-                WHERE ap.id IN %s
-                  AND aa.id IN %s
-                GROUP BY aa.id
-            """, (tuple(open_periods_ids), tuple(account_ids)))
-            calc_data = self.map_data_to_account_id(
-                self.cursor.dictfetchall())
-
-        # Insert credit, debit and balance field values
-        for account in accounts:
-            entry = calc_data.get(account['id'])
-            account.update({
-                'credit': entry['credit'] if entry else 0.0,
-                'debit': entry['debit'] if entry else 0.0,
-                'balance': entry['balance'] if entry else 0.0
-            })
-
-        # Aggregate the static balance values to the current ones
-        if closed_period_ids:
-            # Ensure static data is correct
-            self.verify_static_data()
-
-            self.cursor.execute("""
-                SELECT
-                  account_id,
-                  SUM(credit) AS credit,
-                  SUM(debit) AS debit,
-                  SUM(balance) as balance
-                FROM account_static_balance
-                WHERE account_id IN %s
-                AND period_id IN %s
-                GROUP BY account_id;
-                """, (tuple(account_ids), tuple(closed_period_ids)))
-
-            static_data = self.cursor.dictfetchall()
-
-            # Iterate over accounts
-            for account in accounts:
-                # Get all children accounts
-                children_ids = account_obj._get_children_and_consol(
-                    self.cursor, self.uid, account['id'])
-                entries = filter(
-                    lambda s: s['account_id'] in children_ids, static_data)
-                for entry in entries:
-                    # We have static data for the account so we sum
-                    # the values
-                    account.update({
-                        'credit': account['credit'] + entry['credit'],
-                        'debit': account['debit'] + entry['debit'],
-                        'balance': account['balance'] + entry['balance'],
-                    })
-
-        return accounts
+        return dict(
+            item for item in accounts.iteritems() if item[0] in account_ids)
 
     def _get_comparison_details(self, data, account_ids, target_move,
                                 comparison_filter, index):

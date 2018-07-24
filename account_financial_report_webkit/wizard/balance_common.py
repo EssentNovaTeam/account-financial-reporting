@@ -60,7 +60,8 @@ class AccountBalanceCommonWizard(orm.TransientModel):
 
     COMPARE_SELECTION = [('filter_no', 'No Comparison'),
                          ('filter_year', 'Fiscal Year'),
-                         ('filter_date', 'Date'),
+                         # Nova: not supported using static balances:
+                         # ('filter_date', 'Date'),
                          ('filter_period', 'Periods'),
                          ('filter_opening', 'Opening Only')]
 
@@ -88,7 +89,8 @@ class AccountBalanceCommonWizard(orm.TransientModel):
             print all accounts."),
         'filter': fields.selection(
             [('filter_no', 'No Filters'),
-             ('filter_date', 'Date'),
+             # Nova: not supported using static balances:
+             # ('filter_date', 'Date'),
              ('filter_period', 'Periods'),
              ('filter_opening', 'Opening Only')],
             "Filter by",

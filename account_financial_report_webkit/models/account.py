@@ -45,3 +45,20 @@ class AccountAccount(orm.Model):
     _defaults = {
         'centralized': False,
     }
+
+    def create(self, cr, uid, vals, context=None):
+        """ Create static balances for all closed periods for the new account
+        """
+        res = super(AccountAccount, self).create(
+            cr, uid, vals, context=context)
+        period_ids = self.pool['account.period'].search(
+            cr, uid, [('state', '=', 'done'), ('special', '=', False)],
+            context=context)
+        if period_ids:
+            periods = self.pool['account.period'].browse(
+                cr, uid, period_ids, context=context)
+            self.pool['account.static.balance'].calculate_static_balance(
+                cr, uid, periods=periods,
+                accounts=self.browse(cr, uid, res, context=context),
+                context=context)
+        return res
