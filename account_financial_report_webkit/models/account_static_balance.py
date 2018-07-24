@@ -96,6 +96,7 @@ class AccountStaticBalance(models.Model):
         self.calculate_static_balance(
             periods=missing_per, accounts=missing_acc)
 
+    @api.multi
     def get_missing_periods_and_accounts(self, missing_combinations):
         # Split into unique periods and accounts
         per_ids, acc_ids = map(list, map(set, zip(*missing_combinations)))

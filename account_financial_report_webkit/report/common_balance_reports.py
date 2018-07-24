@@ -104,13 +104,6 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
                 # never include the opening in the debit / credit amounts
                 period_ids = self.exclude_opening_periods(period_ids)
 
-        init_balance = False
-        if initial_balance_mode == 'opening_balance':
-            init_balance = self._read_opening_balance(account_ids, start)
-        elif initial_balance_mode:
-            init_balance = self._compute_initial_balances(
-                account_ids, start, fiscalyear)
-
         ctx = context.copy()
         ctx.update({'state': target_move,
                     'all_fiscalyear': True})
@@ -125,6 +118,7 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
         field_names = ['id', 'type', 'code', 'name', 'parent_id',
                        'level', 'child_id']
 
+        # Read appropriate data from account.account
         accounts = account_obj.read(
             self.cursor, self.uid, account_ids, field_names, context=ctx)
 
@@ -133,7 +127,16 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
                 self.cursor, self.uid, [], context=ctx)
 
         # use static data to calculate credit, debit and balance
+        # This also ensures that all static data has been calculated and is
+        # ready for use. (Including the opening balances.)
         accounts = self.enrich_account_data(accounts, period_ids)
+
+        init_balance = False
+        if initial_balance_mode == 'opening_balance':
+            init_balance = self._read_opening_balance(account_ids, start)
+        elif initial_balance_mode:
+            init_balance = self._compute_initial_balances(
+                account_ids, start, fiscalyear)
 
         accounts_by_id = {}
         for account in accounts:
