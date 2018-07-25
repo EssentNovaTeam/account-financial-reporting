@@ -29,3 +29,7 @@ class TestAccountStaticBalance(SavepointCase):
                     'account_id': self.account.id,
                     'period_id': self.period.id
                 })
+
+    def test_run_cron(self):
+        """ The cron method runs without any errors """
+        self.env['account.static.balance'].auto_populate_table()
