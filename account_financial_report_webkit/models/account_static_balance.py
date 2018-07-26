@@ -44,7 +44,8 @@ class AccountStaticBalance(models.Model):
             WHERE ap.state = 'done' and not ap.special {})
           SELECT period, account FROM balances WHERE balance IS NULL;
         """.format('AND ap.id IN %(period_ids)s' if periods else '')
-        self.env.cr.execute(query, {'period_ids': tuple(periods.ids)})
+        self.env.cr.execute(query, {
+            'period_ids': tuple(periods.ids) if periods else None})
         return self.env.cr.fetchall()
 
     @api.multi
