@@ -24,7 +24,9 @@
 
 import logging
 
+from openerp import models
 from openerp.osv import osv
+from openerp.models import PREFETCH_MAX
 from openerp.tools.translate import _
 from openerp.addons.account.report.common_report_header \
     import common_report_header
@@ -610,3 +612,32 @@ WHERE move_id in %s"""
             return 'opening_balance'
         else:
             return 'initial_balance'
+
+    ####################
+    # Chunking Helpers #
+    ####################
+    def chunked(self, records_or_ids, model=None, size=PREFETCH_MAX,
+                whole=False, note=None):
+        """ Generator to iterate over potentially large amounts of records
+        while keeping cache size under control. """
+        ids = records_or_ids
+        if isinstance(records_or_ids, models.BaseModel):
+            ids = records_or_ids.with_context(prefetch=False).ids
+            model = records_or_ids._name
+        if not model:
+            raise Warning(
+                'If you pass ids to be chunked you also have to pass a model')
+        length = len(ids)
+        if note is None:
+            note = ''
+        if note:
+            note = '%s: ' % note
+        for i in range(0, length, size):
+            self.env.invalidate_all()
+            _logger.debug('%sFetching %s-%s of %s records_or_ids of model %s',
+                          note, i + 1, min(i + size, length), length, model)
+            if whole:
+                yield self.env[model].browse(ids[i:i + size])
+            else:
+                for record in self.env[model].browse(ids[i:i + size]):
+                    yield record

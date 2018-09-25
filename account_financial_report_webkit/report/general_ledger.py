@@ -19,15 +19,17 @@
 #
 ##############################################################################
 
+import logging
 from operator import itemgetter
 from itertools import groupby
 from datetime import datetime
-
 from openerp.report import report_sxw
-from openerp import pooler
+from openerp import pooler, api
 from openerp.tools.translate import _
 from .common_reports import CommonReportHeaderWebkit
 from .webkit_parser_header_fix import HeaderFooterTextWebKitParser
+
+LOGGER = logging.getLogger(__name__)
 
 
 class GeneralLedgerWebkit(report_sxw.rml_parse, CommonReportHeaderWebkit):
@@ -116,9 +118,8 @@ class GeneralLedgerWebkit(report_sxw.rml_parse, CommonReportHeaderWebkit):
         elif initial_balance_mode == 'opening_balance':
             init_balance_memoizer = self._read_opening_balance(accounts, start)
 
-        ledger_lines_memoizer = self._compute_account_ledger_lines(
-            accounts, init_balance_memoizer, main_filter, target_move, start,
-            stop)
+        ledger_lines_memoizer = self.get_move_lines(
+            accounts, main_filter, start, stop, target_move)
         objects = self.pool.get('account.account').browse(self.cursor,
                                                           self.uid,
                                                           accounts)
@@ -207,32 +208,146 @@ class GeneralLedgerWebkit(report_sxw.rml_parse, CommonReportHeaderWebkit):
 
         return centralized_lines
 
-    def _compute_account_ledger_lines(self, accounts_ids,
-                                      init_balance_memoizer, main_filter,
-                                      target_move, start, stop):
+    def get_move_lines(self, account_ids, main_filter, start, stop,
+                       target_move, mode='include_opening'):
+        """ Get all elegible move lines for all accounts.
+        :param accounts_ids: account.account
+        :param main_filter: string filter_no|filter_period|filter_date
+        :param start: date|period
+        :param stop: date|period
+        :param target_move: string: select only posted moves
+        :param mode: string: include_opening|exclude_opening
+        """
+        LOGGER.debug("GL Report: Building move line domain")
+        self.env = api.Environment(self.cr, self.uid, {})
+        account_map = {}
+
+        # Ensure the right mode is specified
+        if mode not in ('include_opening', 'excude_opening'):
+            raise NotImplementedError(
+                "Unknown mode specified. Mode can be either of: "
+                "'include_opening' or 'exclude_opening'.")
+
+        # Select the lowest possible IN for the accounts.
+        excl_account_ids = self.env['account.account'].search(
+            [('id', 'not in', account_ids)]).ids
+        if len(excl_account_ids) < len(account_ids):
+            domain = [('account_id', 'not in', excl_account_ids)]
+        else:
+            domain = [('account_id', 'in', account_ids)]
+
+        if main_filter in ('filter_period', 'filter_no'):
+            # Search for periods
+            period_ids = self.env['account.period'].build_ctx_periods(
+                start.id, stop.id)
+            if not period_ids:
+                # There is no period
+                return account_map
+            domain += [('period_id', 'in', period_ids)]
+
+        if main_filter == 'filter_date':
+            # Filter on date
+            domain += [('date', '>=', start), ('date', '<=', stop)]
+
+        if target_move == 'posted':
+            # Only posted moves
+            domain += [('move_id.state', '=', 'posted')]
+
+        LOGGER.debug(
+            "GL Report: Searching for move lines with domain: %s", domain)
+        move_lines = self.env['account.move.line'].with_context(
+            prefetch_fields=False).search(domain)
+
+        # Construct the default results dictionary
+        account_map = self.generate_empty_results(account_ids)
+
+        if not move_lines:
+            # There are no elegible move lines
+            LOGGER.debug("GL report: No elegible move lines found")
+            return account_map
+        LOGGER.debug("GL Report: Collecting and mapping move line data")
+        for line in self.chunked(move_lines.ids, model='account.move.line'):
+            # Map the relevant line info to the correct dict key
+            self.map_values_to_keys(account_map, line)
+
+        return account_map
+
+    @staticmethod
+    def generate_empty_results(account_ids):
+        """ Generate an empty dictionary with account id as keys and an empty
+        list as value. """
         res = {}
-        for acc_id in accounts_ids:
-            move_line_ids = self.get_move_lines_ids(
-                acc_id, main_filter, start, stop, target_move)
-            if not move_line_ids:
-                res[acc_id] = []
-                continue
-
-            lines = self._get_ledger_lines(move_line_ids, acc_id)
-            res[acc_id] = lines
+        for account_id in account_ids:
+            res[account_id] = []
         return res
 
-    def _get_ledger_lines(self, move_line_ids, account_id):
-        if not move_line_ids:
-            return []
-        res = self._get_move_line_datas(move_line_ids)
-        # computing counter part is really heavy in term of ressouces
-        # consuption looking for a king of SQL to help me improve it
-        move_ids = [x.get('move_id') for x in res]
-        counter_parts = self._get_moves_counterparts(move_ids, account_id)
-        for line in res:
-            line['counterparts'] = counter_parts.get(line.get('move_id'), '')
-        return res
+    def map_values_to_keys(self, account_map, line):
+        """ Gathers the data from each move line and inserts them into the
+        account map. Ultimatly try to find the invoice id of the lines' move
+        if there is any.
+        :param account_map: Account map is dictionary mapping the account_id
+                            to the relevant move lines
+        :param line: the current move line we are evaluating
+        :returns True, updated account_map
+        """
+        vals = {
+            # Move line data
+            'id': line.id,
+            'ldate': line.date,
+            'date_maturity': line.date_maturity,
+            'amount_currency': line.amount_currency,
+            'lref': line.ref,
+            'lname': line.name,
+            'balance': (line.debit or 0.0) - (line.credit or 0.0),
+            'debit': line.debit,
+            'credit': line.credit,
+            # Move data
+            'move_name': line.move_id.name,
+            'move_id': line.move_id.id,
+            # Journal data
+            'jcode': line.journal_id.code,
+            'jtype': line.journal_id.type,
+            # Currency data
+            'currency_id': line.currency_id.id,
+            'currency_code': line.currency_id.name,
+            # Account data
+            'account_id': line.account_id.id,
+            # Period data
+            'lperiod_id': line.period_id.id,
+            # Partner data
+            'lpartner_id': line.partner_id.id,
+            'partner_name': line.partner_id.name or '',
+            # Reconcile data
+            'rec_name': (line.reconcile_partial_id.name or
+                         line.reconcile_id.name or ''),
+            'rec_id': (line.reconcile_partial_id.id or
+                       line.reconcile_id.id or False),
+            # Default invoice values
+            'invoice_id': False,
+            'invoice_type': None,
+            'invoice_number': None
+        }
+
+        # Get the invoice information
+        if line.move_id:
+            self.cr.execute("""
+                SELECT id AS invoice_id,
+                       type AS invoice_type,
+                       number AS invoice_number
+                FROM account_invoice
+                WHERE move_id = %i
+            """ % line.move_id.id)
+            invoice_data = self.cr.dictfetchall()
+            if invoice_data:
+                vals.update(invoice_data[0])
+
+        # Get the counterpart account information
+        codes = line.mapped('move_id.line_id.account_id.code')
+        sibling_codes = [c for c in codes if c != line.account_id.code]
+        vals.update({'counterparts': ", ".join(sibling_codes)})
+
+        # Insert the data of the line at the account_id key
+        account_map[line.account_id.id] += [vals]
 
 
 HeaderFooterTextWebKitParser(
