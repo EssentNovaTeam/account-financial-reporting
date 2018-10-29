@@ -266,11 +266,33 @@ class GeneralLedgerWebkit(report_sxw.rml_parse, CommonReportHeaderWebkit):
             LOGGER.debug("GL report: No elegible move lines found")
             return account_map
         LOGGER.debug("GL Report: Collecting and mapping move line data")
-        for line in self.chunked(move_lines.ids, model='account.move.line'):
+        for chunk in self.chunked(
+                move_lines.ids, model='account.move.line', whole=True):
+            # Per chunk, prefetch all account codes
+            account_code_map = self.get_account_code_map(chunk)
             # Map the relevant line info to the correct dict key
-            self.map_values_to_keys(account_map, line)
+            for line in chunk:
+                self.map_values_to_keys(account_map, line, account_code_map)
 
         return account_map
+
+    def get_account_code_map(self, move_lines):
+        """ Creates a dictionary mapping the move id to the de-duplicated
+        account codes for each of the moves moves lines of that move.
+        :return {move_id: ['account_code', 'account_code', ...]}
+        """
+        move_ids = move_lines.mapped('move_id').ids
+        self.cr.execute("""
+            SELECT am.id as move_id, array_agg(aa.code) as aa_codes
+            FROM account_move_line aml
+                JOIN account_move am ON am.id = aml.move_id
+                JOIN account_account aa ON aa.id = aml.account_id
+            WHERE am.id in %s GROUP BY am.id;
+        """, (tuple(move_ids),))
+        code_map = {}
+        for row in self.cr.dictfetchall():
+            code_map[row['move_id']] = list(set(row['aa_codes']))
+        return code_map
 
     @staticmethod
     def generate_empty_results(account_ids):
@@ -281,13 +303,16 @@ class GeneralLedgerWebkit(report_sxw.rml_parse, CommonReportHeaderWebkit):
             res[account_id] = []
         return res
 
-    def map_values_to_keys(self, account_map, line):
+    @staticmethod
+    def map_values_to_keys( account_map, line, account_code_map):
         """ Gathers the data from each move line and inserts them into the
         account map. Ultimatly try to find the invoice id of the lines' move
         if there is any.
         :param account_map: Account map is dictionary mapping the account_id
                             to the relevant move lines
         :param line: the current move line we are evaluating
+        :param account_code_map: dictionary mapping the move_id to the list of
+                                 account codes for all move lines
         :returns True, updated account_map
         """
         vals = {
@@ -322,27 +347,13 @@ class GeneralLedgerWebkit(report_sxw.rml_parse, CommonReportHeaderWebkit):
                          line.reconcile_id.name or ''),
             'rec_id': (line.reconcile_partial_id.id or
                        line.reconcile_id.id or False),
-            # Default invoice values
-            'invoice_id': False,
-            'invoice_type': None,
-            'invoice_number': None
+            'invoice_id': line.invoice.id,
+            'invoice_type': line.invoice.type,
+            'invoice_number': line.invoice.number
         }
 
-        # Get the invoice information
-        if line.move_id:
-            self.cr.execute("""
-                SELECT id AS invoice_id,
-                       type AS invoice_type,
-                       number AS invoice_number
-                FROM account_invoice
-                WHERE move_id = %i
-            """ % line.move_id.id)
-            invoice_data = self.cr.dictfetchall()
-            if invoice_data:
-                vals.update(invoice_data[0])
-
         # Get the counterpart account information
-        codes = line.mapped('move_id.line_id.account_id.code')
+        codes = account_code_map[line.move_id.id]
         sibling_codes = [c for c in codes if c != line.account_id.code]
         vals.update({'counterparts': ", ".join(sibling_codes)})
 
