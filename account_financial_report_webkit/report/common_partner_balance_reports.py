@@ -52,10 +52,8 @@ class CommonPartnerBalanceReportHeaderWebkit(CommonBalanceReportHeaderWebkit,
             partners_init_balances_by_ids.update(
                 self._get_partners_initial_balances(
                     account_id, start, initial_balance_mode,
-                    partner_filter_ids=partner_filter_ids,
-                    # we'll never exclude reconciled entries in the legal
-                    # reports
-                    exclude_reconcile=False))
+                    partner_filter_ids=partner_filter_ids
+                ))
             opening_mode = 'exclude_opening'
             if main_filter == 'filter_opening':
                 opening_mode = 'include_opening'
@@ -96,8 +94,7 @@ class CommonPartnerBalanceReportHeaderWebkit(CommonBalanceReportHeaderWebkit,
 
     def _get_partners_initial_balances(self, account_ids, start_period,
                                        initial_balance_mode,
-                                       partner_filter_ids=None,
-                                       exclude_reconcile=False):
+                                       partner_filter_ids=None):
         # we get the initial balance from the opening period (opening_balance)
         # when the opening period is included in the start period and
         # when there is at least one entry in the opening period. Otherwise we
@@ -107,12 +104,10 @@ class CommonPartnerBalanceReportHeaderWebkit(CommonBalanceReportHeaderWebkit,
                 start_period)
             res = self._compute_partners_initial_balances(
                 account_ids, start_period, partner_filter_ids,
-                force_period_ids=opening_period_selected,
-                exclude_reconcile=exclude_reconcile)
+                force_period_ids=opening_period_selected)
         elif initial_balance_mode == 'initial_balance':
             res = self._compute_partners_initial_balances(
-                account_ids, start_period, partner_filter_ids,
-                exclude_reconcile=exclude_reconcile)
+                account_ids, start_period, partner_filter_ids)
         else:
             res = {}
         return res

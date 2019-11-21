@@ -25,6 +25,7 @@
 from collections import defaultdict
 from datetime import datetime
 
+from openerp import api
 from openerp.tools import DEFAULT_SERVER_DATE_FORMAT
 from .common_reports import CommonReportHeaderWebkit
 
@@ -269,6 +270,9 @@ class CommonPartnersReportHeaderWebkit(CommonReportHeaderWebkit):
                                            exclude_reconcile=False,
                                            force_period_ids=False,
                                            date_stop=None):
+
+        self.env = api.Environment(self.cr, self.uid, {})
+
         # take ALL previous periods
         period_ids = force_period_ids \
             if force_period_ids \
@@ -277,35 +281,44 @@ class CommonPartnersReportHeaderWebkit(CommonReportHeaderWebkit):
 
         if not period_ids:
             period_ids = [-1]
-        search_param = {
-            'date_start': start_period.date_start,
-            'period_ids': tuple(period_ids),
-            'account_ids': tuple(account_ids),
-        }
-        sql = ("SELECT ml.id, ml.account_id, ml.partner_id "
-               "FROM account_move_line ml "
-               "INNER JOIN account_account a "
-               "ON a.id = ml.account_id "
-               "WHERE ml.period_id in %(period_ids)s "
-               "AND ml.account_id in %(account_ids)s ")
+
+        domain = [
+            ('period_id', 'in', period_ids),
+            ('account_id', 'in', account_ids),
+        ]
+
         if exclude_reconcile:
             if not date_stop:
                 raise Exception(
                     "Missing \"date_stop\" to compute the open invoices.")
-            search_param.update({'date_stop': date_stop})
-            sql += ("AND ((ml.reconcile_id IS NULL) "
-                    "OR (ml.reconcile_id IS NOT NULL \
-                    AND ml.last_rec_date > date(%(date_stop)s))) ")
+            domain += [
+                '|',
+                ('reconcile_id', '=', False),
+                '&',
+                ('reconcile_id', '!=', False),
+                ('last_rec_date', '>', date_stop)
+            ]
         if partner_filter:
-            sql += "AND ml.partner_id in %(partner_ids)s "
-            search_param.update({'partner_ids': tuple(partner_filter)})
+            domain += [
+                ('partner_id', 'in', partner_filter)
+            ]
 
-        self.cursor.execute(sql, search_param)
-        return self.cursor.dictfetchall()
+        move_line_ids = self.pool.get('account.move.line').search(
+            self.cr, self.uid, domain
+        )
+
+        data = []
+        for move_line in self.chunked(move_line_ids, 'account.move.line'):
+            data.append({
+                'id': move_line.id,
+                'account_id': move_line.account_id.id,
+                'partner_id': move_line.partner_id.id
+            })
+
+        return data
 
     def _compute_partners_initial_balances(self, account_ids, start_period,
                                            partner_filter=None,
-                                           exclude_reconcile=False,
                                            force_period_ids=False):
         """We compute initial balance.
         If form is filtered by date all initial balance are equal to 0
@@ -313,12 +326,21 @@ class CommonPartnersReportHeaderWebkit(CommonReportHeaderWebkit):
         as no secondary currency"""
         if isinstance(account_ids, (int, long)):
             account_ids = [account_ids]
-        move_line_ids = self._partners_initial_balance_line_ids(
-            account_ids, start_period, partner_filter,
-            exclude_reconcile=exclude_reconcile,
-            force_period_ids=force_period_ids)
-        if not move_line_ids:
-            move_line_ids = [{'id': -1}]
+
+        # take ALL previous periods
+        period_ids = force_period_ids \
+            if force_period_ids \
+            else self._get_period_range_from_start_period(
+            start_period, fiscalyear=False, include_opening=False)
+
+        if not period_ids:
+            period_ids = [-1]
+
+        search_param = {
+            'period_ids': tuple(period_ids),
+            'account_ids': tuple(account_ids),
+        }
+
         sql = ("SELECT ml.account_id, ml.partner_id,"
                "       sum(ml.debit) as debit, sum(ml.credit) as credit,"
                "       sum(ml.debit-ml.credit) as init_balance,"
@@ -331,11 +353,15 @@ class CommonPartnersReportHeaderWebkit(CommonReportHeaderWebkit):
                "ON a.id = ml.account_id "
                "LEFT JOIN res_currency c "
                "ON c.id = a.currency_id "
-               "WHERE ml.id in %(move_line_ids)s "
-               "GROUP BY ml.account_id, ml.partner_id, a.currency_id, c.name")
-        search_param = {
-            'move_line_ids': tuple([move_line['id'] for move_line in
-                                    move_line_ids])}
+               "WHERE ml.period_id in %(period_ids)s "
+               "AND  ml.account_id in %(account_ids)s")
+
+        if partner_filter:
+            sql += "AND ml.partner_id in %(partner_ids)s "
+            search_param.update({'partner_ids': tuple(partner_filter)})
+
+        sql += "GROUP BY ml.account_id, ml.partner_id, a.currency_id, c.name"
+
         self.cursor.execute(sql, search_param)
         res = self.cursor.dictfetchall()
         return self._tree_move_line_ids(res)
