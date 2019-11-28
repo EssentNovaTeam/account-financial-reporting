@@ -140,8 +140,7 @@ class PartnersLedgerWebkit(report_sxw.rml_parse,
         initial_balance_lines = {}
         if initial_balance_mode == 'initial_balance':
             initial_balance_lines = self._compute_partners_initial_balances(
-                accounts, start_period, partner_filter=partner_ids,
-                exclude_reconcile=False)
+                accounts, start_period, partner_filter=partner_ids)
 
         ledger_lines = self._compute_partner_ledger_lines(
             accounts, main_filter, target_move, start, stop,

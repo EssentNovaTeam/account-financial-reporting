@@ -55,7 +55,6 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
         if context is None:
             context = {}
 
-        account_obj = self.pool.get('account.account')
         period_obj = self.pool.get('account.period')
         use_period_ids = main_filter in (
             'filter_no', 'filter_period', 'filter_opening')
@@ -81,13 +80,6 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
         elif main_filter == 'filter_date':
             ctx.update({'date_from': start,
                         'date_to': stop})
-
-        field_names = ['id', 'type', 'code', 'name', 'parent_id',
-                       'level', 'child_id']
-
-        # Read appropriate data from account.account
-        accounts = account_obj.read(
-            self.cursor, self.uid, account_ids, field_names, context=ctx)
 
         if not use_period_ids:
             period_ids = period_obj.search(

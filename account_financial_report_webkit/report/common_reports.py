@@ -24,7 +24,7 @@
 
 import logging
 
-from openerp import models
+from openerp import models, api
 from openerp.osv import osv
 from openerp.models import PREFETCH_MAX
 from openerp.tools.translate import _
@@ -35,6 +35,14 @@ from collections import OrderedDict
 _logger = logging.getLogger('financial.reports.webkit')
 
 MAX_MONSTER_SLICE = 50000
+
+
+class AttrDict(dict):
+    """ Simple Class to map a dictionary with keys and values to an object
+    with attributes. """
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
 
 
 class CommonReportHeaderWebkit(common_report_header):
@@ -158,10 +166,17 @@ class CommonReportHeaderWebkit(common_report_header):
         if not account_ids:
             return []
 
-        accounts_data = self.pool.get('account.account').read(
-            self.cursor, self.uid, account_ids,
-            ['id', 'parent_id', 'level', 'code', 'child_consol_ids'],
-            context=context)
+        self.env = api.Environment(self.cr, self.uid, {})
+
+        accounts_data = []
+        for account in self.chunked(account_ids, 'account.account'):
+            accounts_data.append({
+                'id': account.id,
+                'parent_id': (account.parent_id.id, account.parent_id.name),
+                'level': account.level,
+                'code': account.code,
+                'child_consol_ids': account.child_consol_ids.ids
+            })
 
         sorted_accounts = []
 
@@ -457,15 +472,15 @@ class CommonReportHeaderWebkit(common_report_header):
         opening_period_selected = self.get_included_opening_period(
             start_period)
 
-        accounts = self.pool.get('account.account').browse(
-            self.cursor, self.uid, account_ids)
-
-        none_accounts = accounts.filtered(
-            lambda x: x.user_type.close_method == 'none')
-
         if pnl_periods_ids and not opening_period_selected:
+            none_account_ids = self.pool['account.account'].search(
+                self.cursor, self.uid, [
+                    ('id', 'in', account_ids),
+                    ('user_type.close_method', '=', 'none')
+                ])
             self.update_account_data(res, self._compute_init_balance(
-                none_accounts.ids, pnl_periods_ids))
+                none_account_ids, pnl_periods_ids))
+
         self.update_account_data(res, self._compute_init_balance(
             account_ids, bs_period_ids))
         return res
@@ -660,3 +675,14 @@ WHERE move_id in %s"""
             else:
                 for record in self.env[model].browse(ids[i:i + size]):
                     yield record
+
+    #####################
+    #       Misc        #
+    #####################
+    def to_attr_dict(self, data):
+        """
+        Creates object with attributes out of given data dictionary
+        :param data: The dictionary to convert into dictionary with attributes
+        :return: Returns dictionary with attributes
+        """
+        return AttrDict(data)
