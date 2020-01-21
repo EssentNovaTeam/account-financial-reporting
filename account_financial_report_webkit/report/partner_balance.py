@@ -83,6 +83,37 @@ class PartnerBalanceWebkit(report_sxw.rml_parse,
         """
         return 'initial_balance'
 
+    def _compute_initial_balances(self, account_ids, start_period,
+                                  fiscalyear, **kwargs):
+        """
+        When computing initial balances we want to exclude opening periods
+        """
+        return super(CommonPartnerBalanceReportHeaderWebkit, self).\
+            _compute_initial_balances(
+            account_ids,
+            start_period,
+            fiscalyear,
+            include_opening=False,
+            **kwargs
+        )
+
+    def _get_period_range_from_start_period(self, start_period,
+                                            include_opening=False,
+                                            fiscalyear=False,
+                                            stop_at_previous_opening=False,
+                                            **kwargs):
+        """We retrieve all periods before start period"""
+
+        return super(CommonPartnerBalanceReportHeaderWebkit, self). \
+            _get_period_range_from_start_period(
+            start_period,
+            include_opening=include_opening,
+            fiscalyear=fiscalyear,
+            stop_at_previous_opening=stop_at_previous_opening,
+            exclude_first_special_period=True,
+            **kwargs
+        )
+
     def set_context(self, objects, data, ids, report_type=None):
         """Populate a ledger_lines attribute on each browse record that will
             be used by mako template"""
@@ -92,6 +123,7 @@ class PartnerBalanceWebkit(report_sxw.rml_parse,
         self.localcontext.update(context_report_values)
         return super(PartnerBalanceWebkit, self).set_context(
             objects, data, new_ids, report_type=report_type)
+
 
 HeaderFooterTextWebKitParser(
     'report.account.account_report_partner_balance_webkit',

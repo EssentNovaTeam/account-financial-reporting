@@ -314,7 +314,8 @@ class CommonReportHeaderWebkit(common_report_header):
     def _get_period_range_from_start_period(self, start_period,
                                             include_opening=False,
                                             fiscalyear=False,
-                                            stop_at_previous_opening=False):
+                                            stop_at_previous_opening=False,
+                                            **kwargs):
         """We retrieve all periods before start period"""
         opening_period_id = False
         past_limit = []
@@ -454,7 +455,8 @@ class CommonReportHeaderWebkit(common_report_header):
         return self._compute_init_balance(
             account_ids, opening_period_selected, mode='read')
 
-    def _compute_initial_balances(self, account_ids, start_period, fiscalyear):
+    def _compute_initial_balances(
+            self, account_ids, start_period, fiscalyear, **kwargs):
         """We compute initial balance.
         If form is filtered by date all initial balance are equal to 0
         This function will sum pear and apple in currency amount if account as
@@ -466,9 +468,15 @@ class CommonReportHeaderWebkit(common_report_header):
         # attached doc We include opening period in pnl account in order to see
         # if opening entries were created by error on this account
         pnl_periods_ids = self._get_period_range_from_start_period(
-            start_period, fiscalyear=fiscalyear, include_opening=True)
+            start_period,
+            fiscalyear=fiscalyear,
+            include_opening=kwargs.get('include_opening', True)
+        )
         bs_period_ids = self._get_period_range_from_start_period(
-            start_period, include_opening=True, stop_at_previous_opening=True)
+            start_period,
+            include_opening=kwargs.get('include_opening', True),
+            stop_at_previous_opening=True
+        )
         opening_period_selected = self.get_included_opening_period(
             start_period)
 

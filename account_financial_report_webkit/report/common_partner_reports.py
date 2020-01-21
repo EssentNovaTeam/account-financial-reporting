@@ -89,7 +89,8 @@ class CommonPartnersReportHeaderWebkit(CommonReportHeaderWebkit):
     def _get_period_range_from_start_period(self, start_period,
                                             include_opening=False,
                                             fiscalyear=False,
-                                            stop_at_previous_opening=False):
+                                            stop_at_previous_opening=False,
+                                            **kwargs):
         """We retrieve all periods before start period"""
         periods = super(CommonPartnersReportHeaderWebkit, self).\
             _get_period_range_from_start_period(
@@ -97,9 +98,11 @@ class CommonPartnersReportHeaderWebkit(CommonReportHeaderWebkit):
                 include_opening=include_opening,
                 fiscalyear=fiscalyear,
                 stop_at_previous_opening=stop_at_previous_opening)
-        first_special = self._get_first_special_period()
-        if first_special and first_special.id not in periods:
-            periods.append(first_special.id)
+
+        if not kwargs.get('exclude_first_special_period', False):
+            first_special = self._get_first_special_period()
+            if first_special and first_special.id not in periods:
+                periods.append(first_special.id)
         return periods
 
     def _get_query_params_from_periods(self, period_start, period_stop,
