@@ -19,7 +19,7 @@
 #
 ##############################################################################
 
-
+import logging
 from datetime import datetime
 
 from openerp import pooler
@@ -28,6 +28,8 @@ from openerp.tools.translate import _
 from .common_partner_balance_reports \
     import CommonPartnerBalanceReportHeaderWebkit
 from .webkit_parser_header_fix import HeaderFooterTextWebKitParser
+
+_logger = logging.getLogger(__name__)
 
 
 class PartnerBalanceWebkit(report_sxw.rml_parse,
@@ -88,6 +90,14 @@ class PartnerBalanceWebkit(report_sxw.rml_parse,
         """
         When computing initial balances we want to exclude opening periods
         """
+
+        _logger.info(
+            "include_opening flag set to: '%s'",
+            self.localcontext.get(
+                'include_opening', "value not present in context"
+            )
+        )
+
         return super(CommonPartnerBalanceReportHeaderWebkit, self).\
             _compute_initial_balances(
             account_ids,
@@ -103,6 +113,13 @@ class PartnerBalanceWebkit(report_sxw.rml_parse,
                                             stop_at_previous_opening=False,
                                             **kwargs):
         """We retrieve all periods before start period"""
+
+        _logger.info(
+            "`exclude_first_special_period` flag set to: '%s'",
+            self.localcontext.get(
+                'exclude_first_special_period', 'value not present in context'
+            )
+        )
 
         return super(CommonPartnerBalanceReportHeaderWebkit, self). \
             _get_period_range_from_start_period(
