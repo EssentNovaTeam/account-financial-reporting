@@ -93,7 +93,7 @@ class PartnerBalanceWebkit(report_sxw.rml_parse,
             account_ids,
             start_period,
             fiscalyear,
-            include_opening=False,
+            include_opening=self.localcontext.get('include_opening', False),
             **kwargs
         )
 
@@ -110,7 +110,8 @@ class PartnerBalanceWebkit(report_sxw.rml_parse,
             include_opening=include_opening,
             fiscalyear=fiscalyear,
             stop_at_previous_opening=stop_at_previous_opening,
-            exclude_first_special_period=True,
+            exclude_first_special_period=self.localcontext.get(
+                'exclude_first_special_period', True),
             **kwargs
         )
 

@@ -6,6 +6,7 @@
         ctx={}
         data_dict = {'chart_account_id':ref('account.chart0')}
         from openerp.tools import test_reports
+        ctx.update({'include_opening': True, 'exclude_first_special_period': False})
         test_reports.try_report_action(cr, uid, 'action_account_partner_balance_menu_webkit',wiz_data=data_dict, context=ctx, our_module='account_financial_report_webkit')
 
 -
