@@ -478,8 +478,9 @@ class CommonReportHeaderWebkit(common_report_header):
                     ('id', 'in', account_ids),
                     ('user_type.close_method', '=', 'none')
                 ])
-            self.update_account_data(res, self._compute_init_balance(
-                none_account_ids, pnl_periods_ids))
+            if none_account_ids:
+                self.update_account_data(res, self._compute_init_balance(
+                    none_account_ids, pnl_periods_ids))
 
         self.update_account_data(res, self._compute_init_balance(
             account_ids, bs_period_ids))
