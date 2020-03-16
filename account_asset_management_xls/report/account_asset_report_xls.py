@@ -220,6 +220,20 @@ class AssetReportXls(report_xls):
                 'totals': [
                     1, 0, 'number', None, _render("fy_start_total_formula"),
                     self.rt_cell_style_decimal]},
+            'period_start': {
+                'header': [
+                    1, 18, 'text', _render("_('Period Start Value')"),
+                    None, self.rh_cell_style_right],
+                'asset_view': [
+                    1, 0, 'number', None, _render("period_start_formula"),
+                    self.av_cell_style_decimal],
+                'asset': [
+                    1, 0, 'number', _render("asset.period_start"),
+                    None, self.an_cell_style_decimal],
+                'totals': [
+                    1, 0, 'number', None,
+                    _render("period_start_total_formula"),
+                    self.rt_cell_style_decimal]},
             'fy_depr': {
                 'header': [
                     1, 18, 'text', _render("_('FY Depreciation')"),
@@ -232,6 +246,19 @@ class AssetReportXls(report_xls):
                     self.an_cell_style_decimal],
                 'totals': [
                     1, 0, 'number', None, _render("fy_diff_formula"),
+                    self.rt_cell_style_decimal]},
+            'period_depr': {
+                'header': [
+                    1, 18, 'text', _render("_('Period Depreciation')"),
+                    None, self.rh_cell_style_right],
+                'asset_view': [
+                    1, 0, 'number', None, _render("period_diff_formula"),
+                    self.av_cell_style_decimal],
+                'asset': [
+                    1, 0, 'number', None, _render("period_diff_formula"),
+                    self.an_cell_style_decimal],
+                'totals': [
+                    1, 0, 'number', None, _render("period_diff_formula"),
                     self.rt_cell_style_decimal]},
             'fy_end_value': {
                 'header': [
@@ -246,9 +273,35 @@ class AssetReportXls(report_xls):
                 'totals': [
                     1, 0, 'number', None, _render("fy_end_total_formula"),
                     self.rt_cell_style_decimal]},
+            'period_end_value': {
+                'header': [
+                    1, 18, 'text', _render("_('Period End Value')"),
+                    None, self.rh_cell_style_right],
+                'asset_view': [
+                    1, 0, 'number', None, _render("period_end_formula"),
+                    self.av_cell_style_decimal],
+                'asset': [
+                    1, 0, 'number', _render("asset.period_end_value"),
+                    None, self.an_cell_style_decimal],
+                'totals': [
+                    1, 0, 'number', None, _render("period_end_total_formula"),
+                    self.rt_cell_style_decimal]},
             'fy_end_depr': {
                 'header': [
                     1, 18, 'text', _render("_('Tot. Depreciation')"),
+                    None, self.rh_cell_style_right],
+                'asset_view': [
+                    1, 0, 'number', None, _render("total_depr_formula"),
+                    self.av_cell_style_decimal],
+                'asset': [
+                    1, 0, 'number', None, _render("total_depr_formula"),
+                    self.an_cell_style_decimal],
+                'totals': [
+                    1, 0, 'number', None, _render("total_depr_formula"),
+                    self.rt_cell_style_decimal]},
+            'period_end_depr': {
+                'header': [
+                    1, 18, 'text', _render("_('Tot. Period Depreciation')"),
                     None, self.rh_cell_style_right],
                 'asset_view': [
                     1, 0, 'number', None, _render("total_depr_formula"),
@@ -349,7 +402,14 @@ class AssetReportXls(report_xls):
         if format == 'short':
             prefix = fy_code
         else:
-            prefix = _('Fiscal Year') + ' %s : ' % fy_code
+            if self.period_from:
+                prefix = (_('Fiscal Year') + ' %s : ' +
+                          _('Period') + ' %s - %s ') % (fy_code,
+                                                        self.period_from.name,
+                                                        self.period_to.name)
+            else:
+                prefix = (_('Fiscal Year') + ' %s :' % fy_code)
+
         if report == 'acquisition':
             if format == 'normal':
                 suffix = _('New Acquisitions')
@@ -427,6 +487,10 @@ class AssetReportXls(report_xls):
         uid = self.uid
         context = self.context
         fy = self.fiscalyear
+        # nova start: Determine the start and end period
+        period_start = self.period_start
+        period_end = self.period_end
+        # nova end
         wl_acq = _p.wanted_list_acquisition
         template = self.acquisition_template
         asset_obj = self.pool['account.asset']
@@ -444,12 +508,16 @@ class AssetReportXls(report_xls):
         ws.footer_str = self.xls_footers['standard']
         row_pos = self._report_title(ws, _p, row_pos, _xs, title)
 
+        # nova start: "Change fiscal year to period"
+        # Get all new assets in this period
         cr.execute(
             "SELECT id FROM account_asset "
             "WHERE date_start >= %s AND date_start <= %s"
             "AND id IN %s AND type = 'normal' "
             "ORDER BY date_start ASC",
-            (fy.date_start, fy.date_stop, tuple(self.asset_ids)))
+            (period_end, period_start,
+             tuple(self.asset_ids)))
+        # nova end
         acq_ids = [x[0] for x in cr.fetchall()]
 
         if not acq_ids:
@@ -540,10 +608,18 @@ class AssetReportXls(report_xls):
             ws, row_pos, row_data, row_style=self.rt_cell_style_right)
 
     def _active_report(self, _p, _xs, data, objects, wb):
+        """
+        Generate all write offs in this period and financial year (both are
+        shown on this tab)
+        """
         cr = self.cr
         uid = self.uid
         context = self.context
         fy = self.fiscalyear
+        # nova start: Determine the start and end period
+        period_start = self.period_start
+        period_end = self.period_end
+        # nova end
         wl_act = _p.wanted_list_active
         template = self.active_template
         asset_obj = self.pool['account.asset']
@@ -561,14 +637,17 @@ class AssetReportXls(report_xls):
         ws.footer_str = self.xls_footers['standard']
         row_pos = self._report_title(ws, _p, row_pos, _xs, title)
 
+        # nova start Get all assets between dates
         cr.execute(
             "SELECT id FROM account_asset "
             "WHERE date_start <= %s"
             "AND (date_remove IS NULL OR date_remove >= %s) "
             "AND id IN %s AND type = 'normal' "
             "ORDER BY date_start ASC",
-            (fy.date_stop, fy.date_start, tuple(self.asset_ids))
+            (period_start, period_end,
+             tuple(self.asset_ids))
         )
+        # nova end
         act_ids = [x[0] for x in cr.fetchall()]
 
         if not act_ids:
@@ -599,6 +678,13 @@ class AssetReportXls(report_xls):
             wl_act.index('fy_start_value')
         fy_end_value_pos = 'fy_end_value' in wl_act and \
             wl_act.index('fy_end_value')
+        # nova start: Determine position in xls for period_start and
+        # period_end_value
+        period_start_value_pos = 'period_start' in wl_act and \
+            wl_act.index('period_start')
+        period_end_value_pos = 'period_end_value' in wl_act and \
+            wl_act.index('period_end_value')
+        # nova end
 
         acts = filter(lambda x: x[0] in act_ids, self.assets)
         acts_and_parents = []
@@ -688,17 +774,97 @@ class AssetReportXls(report_xls):
                     value_depreciated = asset.depreciation_base
                 asset.fy_end_value = \
                     asset.depreciation_base - value_depreciated
+
+                # nova start Calculate period start position
+                cr.execute(
+                    "SELECT depreciated_value "
+                    "FROM account_asset_line "
+                    "WHERE line_date >= %s"
+                    "AND asset_id = %s AND type = 'depreciate' "
+                    "ORDER BY line_date ASC LIMIT 1",
+                    (period_start, data[0]))
+                res = cr.fetchone()
+                if res:
+                    period_value_depreciated = res[0]
+                elif asset.state in ['close', 'removed']:
+                    period_value_depreciated = asset.value_depreciated
+                elif not asset.method_number:
+                    period_value_depreciated = 0.0
+                else:
+                    error_name = asset.name
+                    if asset.code:
+                        error_name += ' (' + asset.code + ')' or ''
+                    if asset.state in ['open']:
+                        cr.execute(
+                            "SELECT line_date "
+                            "FROM account_asset_line "
+                            "WHERE asset_id = %s AND type = 'depreciate' "
+                            "AND init_entry=FALSE AND move_check=FALSE "
+                            "AND line_date < %s"
+                            "ORDER BY line_date ASC LIMIT 1",
+                            (data[0], period_end))
+                        res = cr.fetchone()
+                        if res:
+                            raise UserError(
+                                _('Data Error'),
+                                _("You can not report on a Fiscal Year "
+                                  "with unposted entries in prior years. "
+                                  "Please post depreciation table entry "
+                                  "dd. '%s'  of asset '%s' !")
+                                % (res[0], error_name))
+                        else:
+                            raise UserError(
+                                _('Data Error'),
+                                _("Depreciation Table error for asset %s !")
+                                % error_name)
+                    else:
+                        raise UserError(
+                            _('Data Error'),
+                            _("Depreciation Table error for asset %s !")
+                            % error_name)
+                asset.period_start = \
+                    asset.depreciation_base - period_value_depreciated
+
+                # Calculate period end value by getting the deprication
+                cr.execute(
+                    "SELECT depreciated_value "
+                    "FROM account_asset_line "
+                    "WHERE line_date > %s"
+                    "AND asset_id = %s AND type = 'depreciate' "
+                    "ORDER BY line_date ASC LIMIT 1",
+                    (period_end, data[0]))
+                res = cr.fetchone()
+                if res:
+                    period_value_depreciated = res[0]
+                elif not asset.method_number:
+                    period_value_depreciated = 0.0
+                else:
+                    period_value_depreciated = asset.depreciation_base
+                asset.period_end_value = \
+                    asset.depreciation_base - period_value_depreciated
+                # nova end
+
             entry['asset'] = asset
             entries.append(entry)
 
+        # Fill report
         for entry in entries:
             asset = entry['asset']
 
             fy_start_value_cell = rowcol_to_cell(row_pos, fy_start_value_pos)
             fy_end_value_cell = rowcol_to_cell(row_pos, fy_end_value_pos)
+            period_start_value_cell = rowcol_to_cell(row_pos,
+                                                     period_start_value_pos)
+            period_end_value_cell = rowcol_to_cell(row_pos,
+                                                   period_end_value_pos)
             depreciation_base_cell = rowcol_to_cell(
                 row_pos, depreciation_base_pos)
             fy_diff_formula = fy_start_value_cell + '-' + fy_end_value_cell
+            # nova start Calculate period diff to determine the depreciation
+            period_diff_formula = (
+                        period_start_value_cell + '-' +  # noqa: disable F841, report_xls namespace trick
+                        period_end_value_cell)
+            # nova end
             total_depr_formula = depreciation_base_cell \
                 + '-' + fy_end_value_cell
 
@@ -707,6 +873,12 @@ class AssetReportXls(report_xls):
                 depreciation_base_cells = [
                     rowcol_to_cell(row_pos_start + x, depreciation_base_pos)
                     for x in entry['child_pos']]
+
+                depreciation_period_cells = [
+                    # noqa: disable F841, report_xls namespace trick
+                    rowcol_to_cell(row_pos_start + x, depreciation_base_pos)
+                    for x in entry['child_pos']]
+
                 asset_formula = '+'.join(depreciation_base_cells)  # noqa: disable F841, report_xls namespace trick
 
                 salvage_value_cells = [
@@ -723,6 +895,20 @@ class AssetReportXls(report_xls):
                     rowcol_to_cell(row_pos_start + x, fy_end_value_pos)
                     for x in entry['child_pos']]
                 fy_end_formula = '+'.join(fy_end_value_cells)  # noqa: disable F841, report_xls namespace trick
+
+                # nova start: Calculate the period start and period end cells
+                period_start_value_cells = [
+                    rowcol_to_cell(row_pos_start + x, period_start_value_pos)
+                    for x in entry['child_pos']]
+                period_start_formula = '+'.join(
+                    period_start_value_cells)  # noqa: disable F841, report_xls namespace trick
+
+                period_end_value_cells = [
+                    rowcol_to_cell(row_pos_start + x, period_end_value_pos)
+                    for x in entry['child_pos']]
+                period_end_formula = '+'.join(
+                    period_end_value_cells)  # noqa: disable F841, report_xls namespace trick
+                # nova end
 
                 c_specs = map(
                     lambda x: self.render(
@@ -750,6 +936,16 @@ class AssetReportXls(report_xls):
                                                 fy_start_value_pos)
         fy_end_total_formula = rowcol_to_cell(row_pos_start, fy_end_value_pos)  # noqa: disable F841, report_xls namespace trick
 
+        # nova start fill the period start and period end cells
+        period_start_total_formula = rowcol_to_cell(row_pos_start,
+                                                    # noqa: disable F841, report_xls namespace trick
+                                                    period_start_value_pos)
+        period_end_total_formula = rowcol_to_cell(row_pos_start,
+                                                  # noqa: disable F841, report_xls namespace trick
+                                                  period_end_value_pos)
+        period_end_value_cell = rowcol_to_cell(row_pos,
+                                               period_end_value_pos)  # noqa: disable F841, report_xls namespace trick
+        # nova end
         fy_start_value_cell = rowcol_to_cell(row_pos, fy_start_value_pos)
         fy_end_value_cell = rowcol_to_cell(row_pos, fy_end_value_pos)
         depreciation_base_cell = rowcol_to_cell(row_pos, depreciation_base_pos)
@@ -770,6 +966,10 @@ class AssetReportXls(report_xls):
         uid = self.uid
         context = self.context
         fy = self.fiscalyear
+        # nova start Determine the start and end period
+        period_start = self.period_start
+        period_end = self.period_end
+        # nova end
         wl_dsp = _p.wanted_list_removal
         template = self.removal_template
         asset_obj = self.pool['account.asset']
@@ -787,12 +987,16 @@ class AssetReportXls(report_xls):
         ws.footer_str = self.xls_footers['standard']
         row_pos = self._report_title(ws, _p, row_pos, _xs, title)
 
+        # nova start: "Change fiscal year to period"
+        # Get all results in this period
         cr.execute(
             "SELECT id FROM account_asset "
             "WHERE date_remove >= %s AND date_remove <= %s"
             "AND id IN %s AND type = 'normal' "
             "ORDER BY date_remove ASC",
-            (fy.date_start, fy.date_stop, tuple(self.asset_ids)))
+            (period_start, period_end,
+             tuple(self.asset_ids)))
+        # nova end
         dsp_ids = [x[0] for x in cr.fetchall()]
 
         if not dsp_ids:
@@ -892,6 +1096,25 @@ class AssetReportXls(report_xls):
         fy = self.pool.get('account.fiscalyear').browse(
             self.cr, self.uid, data['fiscalyear_id'], context=self.context)
         self.fiscalyear = fy
+        # nova start Determine the start and end period
+        self.period_from = self.pool.get('account.period').browse(
+            self.cr, self.uid, data['period_from'], context=self.context)
+        self.period_to = self.pool.get('account.period').browse(
+            self.cr, self.uid, data['period_to'], context=self.context)
+        self.period_start = self.period_from.date_start
+        self.period_end = self.period_to.date_stop
+
+        if not self.period_from:
+            self.period_start = self.fiscalyear.date_start
+            if self.period_to:
+                self.period_start = self.period_to.date_start
+
+        if not self.period_to:
+            self.period_end = self.fiscalyear.date_stop
+            if self.period_to:
+                self.period_to = self.period_from.date_stop
+
+        # nova end
         self.assets = self._get_children(objects[0].id)
         self.asset_ids = [x[0] for x in self.assets]
 

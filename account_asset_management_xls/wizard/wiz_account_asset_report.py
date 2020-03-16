@@ -14,6 +14,12 @@ class WizAccountAssetReport(models.TransientModel):
     fiscalyear_id = fields.Many2one(
         comodel_name='account.fiscalyear',
         string='Fiscal Year', required=True)
+    period_from = fields.Many2one(
+        comodel_name='account.period', string='Start period',
+        domain="[('fiscalyear_id', '=', fiscalyear_id)]")
+    period_to = fields.Many2one(
+        comodel_name='account.period', string='End period',
+        domain="[('fiscalyear_id', '=', fiscalyear_id)]")
     parent_asset_id = fields.Many2one(
         comodel_name='account.asset',
         string='Asset Filter', domain=[('type', '=', 'view')])
@@ -54,6 +60,8 @@ class WizAccountAssetReport(models.TransientModel):
         datas = {
             'model': 'account.asset',
             'fiscalyear_id': self.fiscalyear_id.id,
+            'period_from': self.period_from.id,
+            'period_to': self.period_to.id,
             'ids': [parent_asset.id],
         }
         return {'type': 'ir.actions.report.xml',
