@@ -327,3 +327,29 @@ class TestAssetManagement(common.TransactionCase):
                                200.00, places=2)
         self.assertAlmostEqual(asset.depreciation_line_ids[-1].amount,
                                100.00, places=2)
+
+    def test_8_validate_set_purchase_date(self):
+        """ Validate if the purchase date will be set. """
+        asset = {
+            'name': 'test asset',
+            'profile_id': self.ref('account_asset_management.'
+                                   'account_asset_profile_car_5Y'),
+            'purchase_value': 1000,
+            'salvage_value': 100,
+            'date_start': time.strftime('%Y-07-07'),
+            'method_time': 'year',
+            'method': 'linear-limit',
+            'method_number': 5,
+            'method_period': 'year',
+            'prorata': False,
+        }
+
+        asset_no_purchase_date = self.env['account.asset'].create(asset)
+        self.assertEquals(asset_no_purchase_date.date_start,
+                          asset_no_purchase_date.purchase_date)
+
+        asset['purchase_date'] = time.strftime('%Y-08-07')
+        asset_purchase_date = self.env['account.asset'].create(asset)
+
+        self.assertEquals(time.strftime('%Y-08-07'),
+                          asset_purchase_date.purchase_date)

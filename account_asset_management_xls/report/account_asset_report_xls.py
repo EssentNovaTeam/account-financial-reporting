@@ -113,6 +113,16 @@ class AssetReportXls(report_xls):
                 'asset_view': [1, 0, 'text', None],
                 'asset': [1, 0, 'text', _render("asset.code or ''")],
                 'totals': [1, 0, 'text', None]},
+            'purchase_date': {
+                'header': [1, 20, 'text', _render("_('Asset Purchase Date')")],
+                'asset_view': [1, 0, 'text', None],
+                'asset': [
+                    1, 0, 'date',
+                    _render("asset.purchase_date and "
+                            "datetime.strptime(asset.purchase_date,'%Y-%m-%d') "
+                            "or None"),
+                    None, self.an_cell_style_date],
+                'totals': [1, 0, 'text', None]},
             'date_start': {
                 'header': [1, 20, 'text', _render("_('Asset Start Date')")],
                 'asset_view': [1, 0, 'text', None],
@@ -178,6 +188,16 @@ class AssetReportXls(report_xls):
                     1, 0, 'date',
                     _render("asset.date_start and "
                             "datetime.strptime(asset.date_start,'%Y-%m-%d') "
+                            "or None"),
+                    None, self.an_cell_style_date],
+                'totals': [1, 0, 'text', None]},
+            'purchase_date': {
+                'header': [1, 20, 'text', _render("_('Asset Purchase Date')")],
+                'asset_view': [1, 0, 'text', None],
+                'asset': [
+                    1, 0, 'date',
+                    _render("asset.purchase_date and "
+                            "datetime.strptime(asset.purchase_date,'%Y-%m-%d') "
                             "or None"),
                     None, self.an_cell_style_date],
                 'totals': [1, 0, 'text', None]},
@@ -305,6 +325,16 @@ class AssetReportXls(report_xls):
                 'header': [1, 20, 'text', _render("_('Reference')")],
                 'asset_view': [1, 0, 'text', None],
                 'asset': [1, 0, 'text', _render("asset.code or ''")],
+                'totals': [1, 0, 'text', None]},
+            'purchase_date': {
+                'header': [1, 20, 'text', _render("_('Asset Purchase Date')")],
+                'asset_view': [1, 0, 'text', None],
+                'asset': [
+                    1, 0, 'date',
+                    _render("asset.purchase_date and "
+                            "datetime.strptime(asset.purchase_date,'%Y-%m-%d') "
+                            "or None"),
+                    None, self.an_cell_style_date],
                 'totals': [1, 0, 'text', None]},
             'date_remove': {
                 'header': [1, 20, 'text', _render("_('Asset Removal Date')")],
@@ -446,9 +476,9 @@ class AssetReportXls(report_xls):
 
         cr.execute(
             "SELECT id FROM account_asset "
-            "WHERE date_start >= %s AND date_start <= %s"
+            "WHERE purchase_date >= %s AND purchase_date <= %s"
             "AND id IN %s AND type = 'normal' "
-            "ORDER BY date_start ASC",
+            "ORDER BY purchase_date ASC",
             (fy.date_start, fy.date_stop, tuple(self.asset_ids)))
         acq_ids = [x[0] for x in cr.fetchall()]
 

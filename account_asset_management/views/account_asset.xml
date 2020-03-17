@@ -49,6 +49,7 @@
                            attrs="{'readonly':['|', ('move_line_check', '=', True), ('state', '!=', 'draft')]}"/>
                     <field name="date_start"
                            attrs="{'readonly': [('state', '!=', 'draft')], 'required': [('type', '=', 'normal')]}"/>
+                    <field name="purchase_date"/>
                   </group>
                   <group>
                     <field name="salvage_value" widget="monetary" options="{'currency_field': 'company_currency_id'}"
@@ -188,6 +189,7 @@
           <field name="value_depreciated"/>
           <field name="value_residual"/>
           <field name="date_start"/>
+          <field name="purchase_date"/>
           <field name="date_remove"/>
           <field name="profile_id"/>
           <field name="state"/>
@@ -240,6 +242,7 @@
           <field name="value_depreciated"/>
           <field name="value_residual"/>
           <field name="date_start"/>
+          <field name="purchase_date"/>
           <field name="date_remove"/>
           <field name="profile_id"/>
           <field name="state"/>

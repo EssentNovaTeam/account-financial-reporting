@@ -15,7 +15,7 @@ class AccountAsset(models.Model):
         """
         return [
             'account', 'name', 'code', 'date_start', 'depreciation_base',
-            'salvage_value',
+            'salvage_value', 'purchase_date',
         ]
 
     @api.model
@@ -24,7 +24,7 @@ class AccountAsset(models.Model):
         Update list in custom module to add/drop columns or change order
         """
         return [
-            'account', 'name', 'code', 'date_start',
+            'account', 'name', 'code', 'date_start', 'purchase_date',
             'depreciation_base', 'salvage_value',
             'fy_start_value', 'fy_depr', 'fy_end_value',
             'fy_end_depr',
@@ -38,7 +38,7 @@ class AccountAsset(models.Model):
         """
         return [
             'account', 'name', 'code', 'date_remove', 'depreciation_base',
-            'salvage_value',
+            'salvage_value', 'purchase_date',
         ]
 
     @api.model

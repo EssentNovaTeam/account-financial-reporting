@@ -97,6 +97,12 @@ class AccountAsset(models.Model):
              "with the depreciations of previous fiscal years "
              "if the Depreciation Start Date is different from the date "
              "for which accounting entries need to be generated.")
+    purchase_date = fields.Date(
+        string='Asset Purchase Date', readonly=True,
+        states={'draft': [('readonly', False)]},
+        default=fields.Datetime.now,
+        help="This line represents the date of purchase, this can differ"
+             "from date_start.")
     date_remove = fields.Date(string='Asset Removal Date', readonly=True)
     state = fields.Selection(
         selection=[
@@ -324,6 +330,10 @@ class AccountAsset(models.Model):
     def create(self, vals):
         if vals.get('method_time') != 'year' and not vals.get('prorata'):
             vals['prorata'] = True
+
+        if vals.get('purchase_date') is None:
+            vals['purchase_date'] = vals.get('date_start')
+
         asset = super(AccountAsset, self).create(vals)
         if self._context.get('create_asset_from_move_line'):
             # Trigger compute of depreciation_base
