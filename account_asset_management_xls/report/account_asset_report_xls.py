@@ -1111,8 +1111,8 @@ class AssetReportXls(report_xls):
 
         if not self.period_to:
             self.period_end = self.fiscalyear.date_stop
-            if self.period_to:
-                self.period_to = self.period_from.date_stop
+            if self.period_from:
+                self.period_end = self.period_from.date_stop
 
         # nova end
         self.assets = self._get_children(objects[0].id)
