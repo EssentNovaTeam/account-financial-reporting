@@ -304,13 +304,13 @@ class AssetReportXls(report_xls):
                     1, 18, 'text', _render("_('Tot. Period Depreciation')"),
                     None, self.rh_cell_style_right],
                 'asset_view': [
-                    1, 0, 'number', None, _render("total_depr_formula"),
+                    1, 0, 'number', None, _render("period_depr_formula"),
                     self.av_cell_style_decimal],
                 'asset': [
-                    1, 0, 'number', None, _render("total_depr_formula"),
+                    1, 0, 'number', None, _render("period_depr_formula"),
                     self.an_cell_style_decimal],
                 'totals': [
-                    1, 0, 'number', None, _render("total_depr_formula"),
+                    1, 0, 'number', None, _render("period_depr_formula"),
                     self.rt_cell_style_decimal]},
             'method': {
                 'header': [
@@ -857,6 +857,8 @@ class AssetReportXls(report_xls):
             period_diff_formula = (
                         period_start_value_cell + '-' +  # noqa: disable F841, report_xls namespace trick
                         period_end_value_cell)
+            period_depr_formula = (
+                    period_start_value_cell + '-' + period_end_value_cell)  # noqa: disable F841, report_xls namespace trick
             # nova end
             total_depr_formula = depreciation_base_cell \
                 + '-' + fy_end_value_cell
@@ -937,6 +939,8 @@ class AssetReportXls(report_xls):
                                                   period_end_value_pos)
         period_end_value_cell = rowcol_to_cell(row_pos,  # noqa: disable F841, report_xls namespace trick
                                                period_end_value_pos)
+        period_depr_formula = (period_start_total_formula + '-'
+                               + period_end_value_cell)  # noqa: disable F841, report_xls namespace trick
         # nova end
         fy_start_value_cell = rowcol_to_cell(row_pos, fy_start_value_pos)
         fy_end_value_cell = rowcol_to_cell(row_pos, fy_end_value_pos)
