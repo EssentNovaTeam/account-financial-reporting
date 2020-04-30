@@ -259,6 +259,9 @@ class CommonPartnersReportHeaderWebkit(CommonReportHeaderWebkit):
         for row in move_lines_data[:]:
             account_id = row.pop('account_id')
             partner_id = row.pop('partner_id')
+            if partner_id is False:
+                partner_id = None
+
             if key:
                 res[account_id].setdefault(partner_id, []).append(row[key])
             else:
