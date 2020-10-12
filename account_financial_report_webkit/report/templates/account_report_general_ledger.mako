@@ -75,7 +75,7 @@
         <!-- we use div with css instead of table for tabular data because div do not cut rows at half at page breaks -->
         %for account in objects:
         <%
-          display_initial_balance = init_balance[account.id] and (init_balance[account.id].get('debit') != 0.0 or init_balance[account.id].get('credit', 0.0) != 0.0)
+          display_initial_balance = init_balance[account.id] and (init_balance[account.id].get('debit', 0.0) != 0.0 or init_balance[account.id].get('credit', 0.0) != 0.0)
           display_ledger_lines = ledger_lines[account.id]
         %>
           %if display_account_raw(data) == 'all' or (display_ledger_lines or display_initial_balance):
@@ -153,9 +153,9 @@
                           ## counterpart
                           <div class="act_as_cell"></div>
                           ## debit
-                          <div class="act_as_cell amount">${formatLang(init_balance[account.id].get('debit')) | amount}</div>
+                          <div class="act_as_cell amount">${formatLang(init_balance[account.id].get('debit', 0.0)) | amount}</div>
                           ## credit
-                          <div class="act_as_cell amount">${formatLang(init_balance[account.id].get('credit')) | amount}</div>
+                          <div class="act_as_cell amount">${formatLang(init_balance[account.id].get('credit', 0.0)) | amount}</div>
                           ## balance cumulated
                           <div class="act_as_cell amount" style="padding-right: 1px;">${formatLang(cumul_balance) | amount }</div>
                          %if amount_currency(data):

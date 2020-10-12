@@ -19,11 +19,14 @@
 #    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 ##############################################################################
-from openerp import api, models
+from openerp import api, fields, models
 
 
 class AccountPeriod(models.Model):
     _inherit = 'account.period'
+
+    journal_period_ids = fields.One2many(
+        'account.journal.period', inverse_name='period_id', readonly=True)
 
     @api.multi
     def action_draft(self):
@@ -31,9 +34,10 @@ class AccountPeriod(models.Model):
         static balance table. """
         res = super(AccountPeriod, self).action_draft()
 
-        # Trigger static data removal without recalculation
-        self.env['account.static.balance'].with_context(
-            skip_recalculation=True).search(
-                [('period_id', 'in', self.ids)]).unlink()
+        if self.env.context.get('clear_static_balance', True):
+            # Trigger static data removal without recalculation
+            self.env['account.static.balance'].with_context(
+                skip_recalculation=True).search(
+                    [('period_id', 'in', self.ids)]).unlink()
 
         return res

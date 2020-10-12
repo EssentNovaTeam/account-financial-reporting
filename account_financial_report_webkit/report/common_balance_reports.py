@@ -108,6 +108,12 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
             account = accounts[account_id]
             if init_balance:
                 entry = init_balance[account_id]
+                if not hasattr(entry, 'balance'):
+                    account['init_balance'] = 0
+                    account['init_balance_currency'] = 0
+                    account['balance'] = 0
+                    account['curr_balance'] = 0
+                    continue
                 account['init_balance'] = entry['balance']
                 account['init_balance_currency'] = entry['curr_balance']
                 account['balance'] += entry['balance']
@@ -285,11 +291,11 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
                                                           account_ids)
 
         to_display_accounts = dict.fromkeys(account_ids, True)
-        init_balance_accounts = dict.fromkeys(account_ids, False)
+        init_balance_accounts = dict.fromkeys(account_ids, 0)
         comparisons_accounts = dict.fromkeys(account_ids, [])
-        debit_accounts = dict.fromkeys(account_ids, False)
-        credit_accounts = dict.fromkeys(account_ids, False)
-        balance_accounts = dict.fromkeys(account_ids, False)
+        debit_accounts = dict.fromkeys(account_ids, 0)
+        credit_accounts = dict.fromkeys(account_ids, 0)
+        balance_accounts = dict.fromkeys(account_ids, 0)
 
         for account in objects:
             if account.type == 'consolidation':
@@ -298,12 +304,13 @@ class CommonBalanceReportHeaderWebkit(CommonReportHeaderWebkit):
             elif account.type == 'view':
                 to_display_accounts.update(
                     dict([(a.id, True) for a in account.child_id]))
+
             debit_accounts[account.id] = \
-                accounts_by_ids[account.id]['debit']
+                accounts_by_ids[account.id].get('debit', 0.0)
             credit_accounts[account.id] = \
-                accounts_by_ids[account.id]['credit']
+                accounts_by_ids[account.id].get('credit', 0.0)
             balance_accounts[account.id] = \
-                accounts_by_ids[account.id]['balance']
+                accounts_by_ids[account.id].get('balance', 0.0)
             init_balance_accounts[account.id] =  \
                 accounts_by_ids[account.id].get('init_balance', 0.0)
 
