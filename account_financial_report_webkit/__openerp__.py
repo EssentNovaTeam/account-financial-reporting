@@ -50,6 +50,7 @@
              'wizard/aged_partner_balance_wizard.xml',
              'wizard/print_journal_view.xml',
              'report_menus.xml',
+             'security/ir.model.access.csv',
              ],
     # tests order matter
     'test': ['test/general_ledger.yml',

@@ -1,7 +1,9 @@
 # coding: utf-8
 import logging
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(
+    'openerp.addons.account_financial_report_webkit.migrations.8.0.1.3.0'
+    '.pre-migration')
 
 
 def migrate(cr, version):
@@ -21,9 +23,8 @@ def migrate(cr, version):
 
     logger.info("Drop constraint")
     cr.execute("""
-        ALTER TABLE account_static_balance 
-        DROP CONSTRAINT account_static_balance_account_static_balance_unique;
+        ALTER TABLE account_static_balance
+        DROP CONSTRAINT IF EXISTS
+        account_static_balance_account_static_balance_unique;
         """)
-
     logger.info("Dropped constraint")
-

@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-# © 2016 Savoir-faire Linux
+# © 2019-2020 Essent
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl.html).
-from datetime import datetime, timedelta
+import imp
+import os
 from psycopg2 import IntegrityError
+from openerp.modules import get_module_resource
 from openerp.tests.common import SavepointCase
-from openerp.tools.misc import mute_logger
+from openerp.tools.misc import file_open, mute_logger
 
 
 class TestAccountStaticBalance(SavepointCase):
@@ -100,106 +102,19 @@ class TestAccountStaticBalance(SavepointCase):
         # move with lines on two different accounts
         self.assertEqual(len(balances), 2)
 
-    def test_04_calculate_balance_for_journal(self):
-        """ Trigger the calculate balance for a specific journal. """
+    def test_04_migrations(self):
+        """ Test the migration of the introduction of journal_id column
+        in the static balance data model
+        """
+        def run_migration(script):
+            pyfile = get_module_resource(
+                'account_financial_report_webkit', 'migrations',
+                '8.0.1.3.0', script)
+            name, ext = os.path.splitext(os.path.basename(pyfile))
+            fp, pathname = file_open(pyfile, pathinfo=True)
+            mod = imp.load_module(
+                name, fp, pathname, ('.py', 'r', imp.PY_SOURCE))
+            mod.migrate(self.env.cr, '8.0.1.3.0')
 
-        # Create move in other journal, so we can validate if there is only
-        # a balance generated for this journal
-        journal_general = self.env['account.journal'].search([
-            ('type', '=', 'general'),
-        ], limit=1)
-
-        move = self.env['account.move'].create({
-            'name': '/',
-            'journal_id': journal_general.id,
-            'period_id': self.period.id,
-            'line_id': [
-                (0, 0, {
-                    'name': '/',
-                    'account_id': self.account_receivable.id,
-                    'debit': 100,
-                }),
-                (0, 0, {
-                    'name': '/',
-                    'account_id': self.account_expense.id,
-                    'credit': 100,
-                }),
-            ]
-        })
-
-        # Post move
-        move.post()
-
-        self.env['account.static.balance'].calculate_static_balance(
-            self.period, journals=journal_general)
-
-        balances = self.env['account.static.balance'].search([])
-
-        # The amount of static balances should be equal to the amount of
-        # unique period - journal - account combinations
-        self.assertEqual(len(balances), 2)
-        self.assertEqual(balances.mapped('period_id'), self.period)
-        self.assertEqual(balances.mapped('journal_id'), journal_general)
-
-    def test_05_invalidated_journal(self):
-        """ Trigger invalidated journals. """
-        # Create move in other journal, so we can validate if there is only
-        # a balance generated for this journal
-        journal_general = self.env['account.journal'].search([
-            ('type', '=', 'general'),
-        ], limit=1)
-
-        move = self.env['account.move'].create({
-            'name': '/',
-            'journal_id': journal_general.id,
-            'period_id': self.period.id,
-            'line_id': [
-                (0, 0, {
-                    'name': '/',
-                    'account_id': self.account_receivable.id,
-                    'debit': 100,
-                }),
-                (0, 0, {
-                    'name': '/',
-                    'account_id': self.account_expense.id,
-                    'credit': 100,
-                }),
-            ]
-        })
-
-        # Post move
-        move.post()
-
-        self.env['account.static.balance'].calculate_static_balance(
-            self.period, journals=journal_general)
-
-        balances = self.env['account.static.balance'].search([])
-
-        # The amount of static balances should be equal to the amount of
-        # unique period - journal - account combinations
-        self.assertEqual(len(balances), 2)
-        self.assertEqual(balances.mapped('period_id'), self.period)
-        self.assertEqual(balances.mapped('journal_id'), journal_general)
-        create_date = min(balances.mapped('create_date'))
-
-        yesterday = datetime.now() - timedelta(days=1)
-        self.env.cr.execute("""
-            UPDATE account_static_balance SET create_date=%s
-                WHERE period_id = %s
-        """, (yesterday, self.period.id,))
-        balances.refresh()
-
-        # Validate that the date is updated succesfully
-        self.assertEqual(
-            str(yesterday)[:-7], max(balances.mapped('create_date')))
-
-        # Calculate balance again, but we know that the integrity of the
-        # static balance is not ok
-
-        self.env['account.static.balance'].calculate_static_balance(
-            self.period, journals=journal_general)
-        new_balances = self.env['account.static.balance'].search([])
-
-        # Validate that the balances are recalculated
-        self.assertNotEqual(balances, new_balances)
-        self.assertEqual(len(balances), len(new_balances))
+        run_migration('pre-migration.py')
+        run_migration('post-migration.py')
