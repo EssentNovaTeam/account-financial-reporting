@@ -30,13 +30,13 @@ query = """
             SELECT
               -- Follow structure of account_static_balance
               1 AS create_uid,
-              NOW() AS create_date,
+              NOW() AT TIME ZONE 'UTC' + INTERVAL '1 SECOND' AS create_date,
               account_id AS account_id,
               sum(curr_balance) as curr_balance,
               1 AS write_uid,
               SUM(credit) AS credit,
               period_id AS period_id,
-              NOW() AS write_date,
+              NOW() AT TIME ZONE 'UTC' + INTERVAL '1 SECOND' AS write_date,
               SUM(debit) AS debit,
               sum(balance) as balance,
               journal_id AS journal_id
