@@ -2,9 +2,10 @@
 # Copyright (C) 2018 DynApps <http://www.dynapps.be>
 # @author Pieter Paulussen <pieter.paulussen@dynapps.be>
 # @author Stefan Rijnhart <stefan.rijnhart@dynapps.nl>
+# @author Robin Conjour <r.conjour@essent.be>
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
+from collections import defaultdict
 import logging
-import psycopg2
 from time import time
 from openerp import api, fields, models
 
@@ -18,6 +19,8 @@ class AccountStaticBalance(models.Model):
         comodel_name='account.account', required=True, index=True)
     period_id = fields.Many2one(
         comodel_name='account.period', required=True, index=True)
+    journal_id = fields.Many2one(
+        'account.journal', required=True, index=True)
     credit = fields.Float(default=0.0)
     debit = fields.Float(default=0.0)
     balance = fields.Float(default=0.0)
@@ -25,24 +28,36 @@ class AccountStaticBalance(models.Model):
 
     _sql_constraints = [
         ('account_static_balance_unique',
-         'unique (account_id, period_id)',
-         'Only 1 unique combination of account and period is allowed.'),
+         'unique (account_id, period_id, journal_id)',
+         'Only 1 unique combination of account, journal and period is '
+         'allowed.'),
     ]
 
     @api.multi
     def get_entries_to_calculate(self, periods=None):
-        """ Calculates all possible combinations of accounts and closed
-        periods which are missing from the expected result.
+        """ Calculates all possible combinations of journal-period-account
+        for which no valid static balance is found.
         """
         query = """
-          WITH balances AS (
-            SELECT ap.id as period, aa.id as account, asb.id as balance
-            FROM account_period ap
-            CROSS JOIN account_account aa
-            LEFT JOIN account_static_balance asb
-              ON asb.account_id = aa.id AND asb.period_id = ap.id
-            WHERE ap.state = 'done' and not ap.special {})
-          SELECT period, account FROM balances WHERE balance IS NULL;
+        SELECT ap.id, aa.id, aj.id
+            FROM account_account aa, account_journal aj, account_period ap
+            WHERE NOT EXISTS (
+                SELECT * FROM account_static_balance asb
+                WHERE asb.account_id = aa.id
+                    AND asb.journal_id = aj.id
+                    AND asb.period_id = ap.id
+                    AND EXISTS (
+                        SELECT * FROM account_journal_period ajp
+                          WHERE ajp.period_id = asb.period_id
+                          AND ajp.journal_id = asb.journal_id
+                          AND asb.create_date > ajp.write_date
+                          AND ajp.state = 'done'))
+                AND EXISTS (
+                SELECT 1 FROM account_move_line aml
+                WHERE aml.account_id = aa.id
+                    AND aml.journal_id = aj.id
+                    AND aml.period_id = ap.id)
+                {};  -- optional period filter
         """.format('AND ap.id IN %(period_ids)s' if periods else '')
         self.env.cr.execute(query, {
             'period_ids': tuple(periods.ids) if periods else None})
@@ -53,119 +68,155 @@ class AccountStaticBalance(models.Model):
         """ When manually unlinking, trigger a recalculation of the entry. """
         accounts = self.mapped('account_id')
         periods = self.mapped('period_id')
+        journals = self.mapped('journal_id')
         res = super(AccountStaticBalance, self).unlink()
-        if not self.env.context.get('skip_recalculation', False):
+        if self and not self.env.context.get('skip_recalculation', False):
             # Trigger recalculation of the entry
             self.env['account.static.balance'].calculate_static_balance(
-                periods=periods, accounts=accounts)
+                periods=periods, accounts=accounts, journals=journals)
         return res
 
     @api.model
     def auto_populate_table(self):
         """ ir.cron function to trigger intial balance calculation for all
         closed periods and accounts if their combination is missing. """
-        periods, accounts = self.get_missing_periods_and_accounts()
-        if not periods:
+        # Remove static balances with integrity errors
+        self.env.cr.execute("""
+            DELETE FROM account_static_balance asb
+            WHERE EXISTS (SELECT * FROM account_journal_period ajp
+                          WHERE ajp.period_id = asb.period_id
+                          AND ajp.journal_id = asb.journal_id
+                          AND asb.create_date >= ajp.write_date
+                          OR ajp.state != 'done')
+        """)
+        period_journal_map = self.get_missing_periods_accounts_and_journals()
+        if not period_journal_map:
             logger.debug("No missing entries found. Static account balance "
                          "data is up to date.")
             return
-        self.calculate_static_balance(periods=periods, accounts=accounts)
+
+        for period, journals in period_journal_map.items():
+            self.calculate_static_balance(period, journals=journals)
 
     @api.multi
-    def get_missing_periods_and_accounts(self, periods=None):
+    def get_missing_periods_accounts_and_journals(self, periods=None):
         # Split into unique periods and accounts
-        per_ids = acc_ids = []
         missing_combinations = self.get_entries_to_calculate(periods=periods)
-        if missing_combinations:
-            per_ids, acc_ids = map(list, map(set, zip(*missing_combinations)))
-        missing_periods = self.env['account.period'].browse(per_ids)
-        missing_accounts = self.env['account.account'].browse(acc_ids)
-        return missing_periods, missing_accounts
+        period_journal_map = defaultdict(lambda: self.env['account.journal'])
+        for period_id, _account_id, journal_id in missing_combinations:
+            period_journal_map[
+                self.env['account.period'].browse(period_id)] |= (
+                    self.env['account.journal'].browse(journal_id))
+        return period_journal_map
 
     @api.model
-    def calculate_static_balance(self, periods, accounts=None):
+    def calculate_static_balance(self, periods, accounts=None, journals=None):
         """ Calculate the balance for a specified set of periods
         and insert them into the table."""
         self = self.suspend_security()
-        periods = periods.filtered(
-            lambda p: p.state == 'done' and not p.special)
-        for row in self.calculate_balance(periods, accounts=accounts):
-            try:
-                with self.env.cr.savepoint():
-                    self.create(row)
-            except psycopg2.IntegrityError:
-                # A balance already exists for this period and account
-                pass
+
+        if not journals:
+            # When journals are set, we can assume that this is a close for
+            # a journal period. Otherwise we need to filter the periods to
+            # check if they are in a done state
+            periods = periods.filtered(lambda p: p.state == 'done')
+        periods = periods.filtered(lambda p: not p.special)
+        if not periods:
+            return
+
+        for period in periods:
+            logging.info(
+                'Storing the calculated static balances for period %s, '
+                'journals %s and accounts %s',
+                period.name,
+                ','.join(journals.mapped('name') if journals else []) or '-',
+                ','.join(accounts.mapped('code') if accounts else []) or '-')
+            domain = [('period_id', '=', period.id)]
+            if journals:
+                domain.append(('journal_id', 'in', journals.ids))
+            if accounts:
+                domain.append(('account_id', 'in', accounts.ids))
+            self.env['account.static.balance'].with_context(
+                skip_recalculation=True).search(domain).unlink()
+            for row in self.calculate_balance(
+                    period, journals=journals, accounts=accounts):
+                self.create(row)
 
     @api.model
-    def calculate_balance(self, periods, accounts=None, include_draft=False):
-        """Calculate the balance for a specified set of periods
-        :param periods: periods to calculate the values for
+    def calculate_balance(
+            self, period, journals=None, accounts=None, include_draft=False):
+        """
+        Calculate the balance for a specified set of periods
+        :param period: period to calculate the values for
         :param accounts: optional accounts to calculate the values for
+        :param journals: optional journals to calculate the values for
         :return: True
         """
-        if not periods:
-            return {}
-        if accounts is None:
-            # Calculate for all accounts
-            accounts = self.env['account.account'].search([])
+        period.ensure_one()
 
         logger.debug(
             "Starting calculation of balances for "
-            "periods: %s.", ", ".join(periods.mapped('name')))
+            "period %s, accounts %s and journals %s",
+            period.name,
+            ','.join(a.code for a in accounts or []) or '-',
+            ','.join(j.code for j in journals or []) or '-')
 
         start_time = time()
 
+        # Prevent adding a meaningless filter on journal_id
+        if journals:
+            self.env.cr.execute(
+                """ SELECT journal_id FROM account_journal_period ajp
+                WHERE period_id = %s """, (period.id,))
+            all_journal_ids = [
+                journal_id for journal_id, in self.env.cr.fetchall()]
+            if set(journals.ids) >= set(all_journal_ids):
+                journals = None
+
+        # Prevent adding a meaningless filter on account_id
+        if accounts:
+            if not self.env['account.account'].with_context(
+                    active_test=False).search([
+                        ('id', 'not in', accounts.ids), ('type', '!=', 'view'),
+                        ('company_id', '=', period.company_id.id),
+                    ]):
+                accounts = None
+
         # Calculate the values for the periods
         query = """
-            WITH expanded AS (
-              SELECT
-                ap.id AS period_id,
-                aa.id AS account_id,
-                0 AS debit,
-                0 AS credit,
-                0 AS balance,
-                0 AS curr_balance
-              FROM account_account aa
-              CROSS JOIN account_period ap
-              WHERE ap.id IN %(period_ids)s AND aa.id in %(account_ids)s
-              UNION ALL
-              SELECT
-                ap.id AS period_id,
-                aa.id AS account_id,
+            SELECT
+                aml.period_id AS period_id,
+                aml.account_id AS account_id,
+                aml.journal_id AS journal_id,
                 COALESCE(SUM(debit), 0) AS debit,
                 COALESCE(SUM(credit), 0) AS credit,
                 COALESCE(sum(debit), 0) - COALESCE(sum(credit), 0) AS balance,
                 COALESCE(sum(amount_currency), 0) AS curr_balance
               FROM account_move_line aml
-              JOIN account_account aa ON aa.id = account_id
-              JOIN account_period ap ON ap.id = aml.period_id
               JOIN account_move am ON aml.move_id = am.id
-              WHERE ap.id IN %(period_ids)s AND aa.id in %(account_ids)s
-                {}  -- AND am.state == 'posted'
-              GROUP BY ap.id, aa.id)
-            SELECT
-              period_id AS period_id,
-              account_id AS account_id,
-              SUM(debit) AS debit,
-              SUM(credit) AS credit,
-              sum(balance) as balance,
-              sum(curr_balance) as curr_balance
-              FROM expanded
-            GROUP BY period_id, account_id
-        """.format('AND am.state = \'posted\'' if not include_draft else '')
+                WHERE aml.period_id=%(period_id)s
+                    {} -- AND aml.account_id IN
+                    {} -- AND aml.journal_id IN
+                    {} -- AND am.state = 'posted'
+              GROUP BY aml.period_id, aml.account_id, aml.journal_id
+        """.format(
+            'AND aml.account_id IN %(account_ids)s' if accounts else '',
+            'AND aml.journal_id IN %(journal_ids)s' if journals else '',
+            'AND am.state = \'posted\'' if not include_draft else '')
         self.env.cr.execute(query, {
-            'period_ids': tuple(periods.ids),
-            'account_ids': tuple(accounts.ids),
+            'period_id': period.id,
+            'account_ids': tuple(accounts.ids) if accounts else None,
+            'journal_ids': tuple(journals.ids) if journals else None,
         })
         time_taken = time() - start_time
         hours, rest = divmod(time_taken, 3600)
         minutes, seconds = divmod(rest, 60)
+
         logger.debug(
-            "Completed calculation of balances for periods %s and %s "
+            "Completed calculation of balances for period %s and %s "
             "accounts. Total duration: %.0f hours %.0f minutes %.0f seconds.",
-            ", ".join(periods.mapped('name')),
-            len(accounts), hours, minutes, seconds)
+            period.name, len(accounts) if accounts else '', hours, minutes,
+            seconds)
         return self.env.cr.dictfetchall()
 
     @api.model
@@ -183,8 +234,10 @@ class AccountStaticBalance(models.Model):
         :param consolidate: include child and consolidated accounts
         :return: dictionary of account ids to values
         """
+        res = {}
         if not accounts or not periods:
-            return {}
+            return res
+
         return_ids = accounts.ids  # Don't return child and consolitated
         if consolidate:
             accounts |= self.env['account.account'].browse(
@@ -192,47 +245,53 @@ class AccountStaticBalance(models.Model):
 
         fields_to_read = [
             'id', 'type', 'code', 'name', 'parent_id', 'level', 'child_id']
-        res = dict((account['id'], account)
-                   for account in accounts.read(fields_to_read))
+        for account in accounts.read(fields_to_read):
+            account.update({
+                'credit': 0,
+                'debit': 0,
+                'balance': 0,
+                'curr_balance': 0,
+            })
+            res[account['id']] = account
 
         def map_data_to_account_id(data):
             for values in data:
                 entry = res[values['account_id']]
                 entry.update({
-                    'credit': entry.get('credit', 0) + values['credit'],
-                    'debit': entry.get('debit', 0) + values['debit'],
-                    'balance': entry.get('balance', 0) + values['balance'],
-                    'curr_balance': entry.get(
-                        'curr_balance', 0) + values['curr_balance'],
+                    'credit': entry['credit'] + values['credit'],
+                    'debit': entry['debit'] + values['debit'],
+                    'balance': entry['balance'] + values['balance'],
+                    'curr_balance': (entry['curr_balance'] +
+                                     values['curr_balance']),
                 })
 
-        static_periods = periods.filtered(
-            lambda p: p.state == 'done' and not p.special)
-        if static_periods:
-            static_periods -= self.get_missing_periods_and_accounts(
-                periods=static_periods)[0]
-        compute_periods = periods - static_periods
-
-        if compute_periods:
+        # Get missing periods, accounts and journals to calc them on the fly
+        for period, journals in self.get_missing_periods_accounts_and_journals(
+                periods=periods).items():
             map_data_to_account_id(
                 self.calculate_balance(
-                    compute_periods, accounts=accounts,
+                    period, journals=journals, accounts=accounts,
                     include_draft=include_draft))
 
-        # Aggregate the static balance values to the current ones
-        if static_periods:
-            self.env.cr.execute("""
-                SELECT account_id,
-                  SUM(credit) AS credit,
-                  SUM(debit) AS debit,
-                  SUM(balance) as balance,
-                  SUM(curr_balance) AS curr_balance
-                FROM account_static_balance
-                WHERE account_id IN %s
-                AND period_id IN %s
-                GROUP BY account_id;
-                """, (tuple(accounts.ids), tuple(static_periods.ids)))
-            map_data_to_account_id(self.env.cr.dictfetchall())
+        # Get amounts from valid static balances
+        self.env.cr.execute(
+            """
+            SELECT account_id,
+                SUM(credit) AS credit,
+                SUM(debit) AS debit,
+                SUM(balance) as balance,
+                SUM(curr_balance) AS curr_balance
+            FROM account_static_balance asb
+            WHERE EXISTS (
+                SELECT * FROM account_journal_period ajp
+                WHERE ajp.period_id = asb.period_id
+                    AND ajp.journal_id = asb.journal_id
+                    AND asb.create_date > ajp.write_date
+                    AND ajp.state = 'done')
+                AND asb.period_id IN %(period_ids)s
+            GROUP BY account_id
+            """, {'period_ids': tuple(periods.ids)})
+        map_data_to_account_id(self.env.cr.dictfetchall())
 
         if consolidate:
             values = res.copy()
@@ -243,8 +302,6 @@ class AccountStaticBalance(models.Model):
                     if child_id == account['id']:
                         continue
                     entry = values[child_id]
-                    # We have static data for the account so we sum
-                    # the values
                     account.update({
                         'credit': account['credit'] + entry['credit'],
                         'debit': account['debit'] + entry['debit'],

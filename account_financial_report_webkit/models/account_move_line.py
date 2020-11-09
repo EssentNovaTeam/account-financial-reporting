@@ -37,3 +37,18 @@ class AccountMoveLine(models.Model):
                 move_lines = line.reconcile_partial_id.line_partial_ids
                 last_line = move_lines.sorted(lambda l: l.date)[-1]
                 line.last_rec_date = last_line.date
+
+    @api.noguess
+    def _auto_end(self, cr, context=None):
+        """
+        Create a combined index on account_move_line to handle performance
+        on balance calculating. This index is here so the query to determine
+        missing balances is performing.
+        """
+        cr.execute("""
+            CREATE INDEX IF NOT EXISTS
+                account_move_line_account_journal_period_index ON
+                    account_move_line(account_id, journal_id, period_id);
+        """)
+
+        return super(AccountMoveLine, self)._auto_end(cr, context=context)

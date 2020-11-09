@@ -301,8 +301,10 @@ class CommonPartnerBalanceReportHeaderWebkit(CommonBalanceReportHeaderWebkit,
         for account in objects:
             if not account.parent_id:  # hide top level account
                 continue
-            debit_accounts[account.id] = accounts_by_ids[account.id]['debit']
-            credit_accounts[account.id] = accounts_by_ids[account.id]['credit']
+            debit_accounts[account.id] = \
+                accounts_by_ids[account.id].get('debit', 0)
+            credit_accounts[account.id] = \
+                accounts_by_ids[account.id].get('credit', 0)
             balance_accounts[account.id] = \
                 accounts_by_ids[account.id]['balance']
             init_balance_accounts[account.id] = accounts_by_ids[
