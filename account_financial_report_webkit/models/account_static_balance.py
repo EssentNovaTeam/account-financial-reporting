@@ -256,6 +256,8 @@ class AccountStaticBalance(models.Model):
 
         def map_data_to_account_id(data):
             for values in data:
+                if values['account_id'] not in accounts.ids:
+                    continue
                 entry = res[values['account_id']]
                 entry.update({
                     'credit': entry['credit'] + values['credit'],
