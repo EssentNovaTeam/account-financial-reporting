@@ -86,8 +86,8 @@ class AccountStaticBalance(models.Model):
             WHERE EXISTS (SELECT * FROM account_journal_period ajp
                           WHERE ajp.period_id = asb.period_id
                           AND ajp.journal_id = asb.journal_id
-                          AND asb.create_date >= ajp.write_date
-                          OR ajp.state != 'done')
+                          AND (ajp.write_date >= asb.create_date
+                               OR ajp.state != 'done'))
         """)
         period_journal_map = self.get_missing_periods_accounts_and_journals()
         if not period_journal_map:
@@ -286,7 +286,7 @@ class AccountStaticBalance(models.Model):
                 SELECT * FROM account_journal_period ajp
                 WHERE ajp.period_id = asb.period_id
                     AND ajp.journal_id = asb.journal_id
-                    AND asb.create_date > ajp.write_date
+                    AND ajp.write_date < asb.create_date
                     AND ajp.state = 'done')
                 AND asb.period_id IN %(period_ids)s
             GROUP BY account_id
